@@ -19,6 +19,7 @@ package org.bitcoinj.net;
 import org.bitcoinj.core.Context;
 import org.bitcoinj.core.Peer;
 import org.bitcoinj.utils.ListenableCompletableFuture;
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
@@ -30,10 +31,11 @@ import java.net.Socket;
 import java.net.SocketAddress;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>Creates a simple connection to a server using a {@link StreamConnection} to process data.</p>
@@ -43,7 +45,7 @@ import static com.google.common.base.Preconditions.checkState;
  * cannot be set using NIO.</p>
  */
 public class BlockingClient implements MessageWriteTarget {
-    private static final org.slf4j.Logger log = LoggerFactory.getLogger(BlockingClient.class);
+    private static final Logger log = LoggerFactory.getLogger(BlockingClient.class);
 
     private static final int BUFFER_SIZE_LOWER_BOUND = 4096;
     private static final int BUFFER_SIZE_UPPER_BOUND = 65536;
@@ -58,14 +60,13 @@ public class BlockingClient implements MessageWriteTarget {
      * open, but will call either the {@link StreamConnection#connectionOpened()} or
      * {@link StreamConnection#connectionClosed()} callback on the created network event processing thread.</p>
      *
-     * @param connectTimeoutMillis The connect timeout set on the connection (in milliseconds). 0 is interpreted as no
-     *                             timeout.
+     * @param connectTimeout The connect timeout set on the connection. ZERO is interpreted as no timeout.
      * @param socketFactory An object that creates {@link Socket} objects on demand, which may be customised to control
      *                      how this client connects to the internet. If not sure, use SocketFactory.getDefault()
      * @param clientSet A set which this object will add itself to after initialization, and then remove itself from
      */
     public BlockingClient(final SocketAddress serverAddress, final StreamConnection connection,
-                          final int connectTimeoutMillis, final SocketFactory socketFactory,
+                          final Duration connectTimeout, final SocketFactory socketFactory,
                           @Nullable final Set<BlockingClient> clientSet) throws IOException {
         connectFuture = new CompletableFuture<>();
         // Try to fit at least one message in the network buffer, but place an upper and lower limit on its size to make
@@ -78,7 +79,7 @@ public class BlockingClient implements MessageWriteTarget {
             if (clientSet != null)
                 clientSet.add(BlockingClient.this);
             try {
-                socket.connect(serverAddress, connectTimeoutMillis);
+                socket.connect(serverAddress, Math.toIntExact(connectTimeout.toMillis()));
                 connection.connectionOpened();
                 connectFuture.complete(serverAddress);
                 InputStream stream = socket.getInputStream();

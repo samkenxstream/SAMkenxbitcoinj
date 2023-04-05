@@ -16,7 +16,7 @@
 
 package org.bitcoinj.core;
 
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.store.BlockStore;
 import org.bitcoinj.store.BlockStoreException;
 
@@ -25,7 +25,7 @@ import java.nio.ByteBuffer;
 import java.util.Locale;
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * Wraps a {@link Block} object with extra data that can be derived from the block chain but is slow or inconvenient to
@@ -126,7 +126,8 @@ public class StoredBlock {
     /** Serializes the stored block to a custom packed format. Used by {@link CheckpointManager}. */
     public void serializeCompact(ByteBuffer buffer) {
         byte[] chainWorkBytes = getChainWork().toByteArray();
-        checkState(chainWorkBytes.length <= CHAIN_WORK_BYTES, "Ran out of space to store chain work!");
+        checkState(chainWorkBytes.length <= CHAIN_WORK_BYTES, () ->
+                "ran out of space to store chain work!");
         if (chainWorkBytes.length < CHAIN_WORK_BYTES) {
             // Pad to the right size.
             buffer.put(EMPTY_BYTES, 0, CHAIN_WORK_BYTES - chainWorkBytes.length);
@@ -135,19 +136,19 @@ public class StoredBlock {
         buffer.putInt(getHeight());
         // Using unsafeBitcoinSerialize here can give us direct access to the same bytes we read off the wire,
         // avoiding serialization round-trips.
-        byte[] bytes = getHeader().unsafeBitcoinSerialize();
+        byte[] bytes = getHeader().bitcoinSerialize();
         buffer.put(bytes, 0, Block.HEADER_SIZE);  // Trim the trailing 00 byte (zero transactions).
     }
 
     /** De-serializes the stored block from a custom packed format. Used by {@link CheckpointManager}. */
-    public static StoredBlock deserializeCompact(NetworkParameters params, ByteBuffer buffer) throws ProtocolException {
+    public static StoredBlock deserializeCompact(MessageSerializer serializer, ByteBuffer buffer) throws ProtocolException {
         byte[] chainWorkBytes = new byte[StoredBlock.CHAIN_WORK_BYTES];
         buffer.get(chainWorkBytes);
         BigInteger chainWork = ByteUtils.bytesToBigInteger(chainWorkBytes);
         int height = buffer.getInt();  // +4 bytes
         byte[] header = new byte[Block.HEADER_SIZE + 1];    // Extra byte for the 00 transactions length.
         buffer.get(header, 0, Block.HEADER_SIZE);
-        return new StoredBlock(params.getDefaultSerializer().makeBlock(header), chainWork, height);
+        return new StoredBlock(serializer.makeBlock(ByteBuffer.wrap(header)), chainWork, height);
     }
 
     @Override

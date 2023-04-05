@@ -46,6 +46,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -53,12 +54,15 @@ import java.io.RandomAccessFile;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.channels.FileLock;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>Utility class that wraps the boilerplate needed to set up a new SPV bitcoinj app. Instantiate it with a directory
@@ -82,7 +86,7 @@ import static com.google.common.base.Preconditions.checkState;
  * if anything goes wrong during startup - you should probably handle it and use {@link Exception#getCause()} to figure
  * out what went wrong more precisely. Same thing if you just use the {@link #startAsync()} method.</p>
  */
-public class WalletAppKit extends AbstractIdleService {
+public class WalletAppKit extends AbstractIdleService implements Closeable {
     protected static final Logger log = LoggerFactory.getLogger(WalletAppKit.class);
 
     protected final BitcoinNetwork network;
@@ -140,35 +144,102 @@ public class WalletAppKit extends AbstractIdleService {
      */
     public WalletAppKit(BitcoinNetwork network, ScriptType preferredOutputScriptType,
                         KeyChainGroupStructure structure, File directory, String filePrefix) {
-        this.network = checkNotNull(network);
+        this.network = Objects.requireNonNull(network);
         this.params = NetworkParameters.of(this.network);
-        this.preferredOutputScriptType = checkNotNull(preferredOutputScriptType);
-        this.structure = checkNotNull(structure);
-        this.directory = checkNotNull(directory);
-        this.filePrefix = checkNotNull(filePrefix);
+        this.preferredOutputScriptType = Objects.requireNonNull(preferredOutputScriptType);
+        this.structure = Objects.requireNonNull(structure);
+        this.directory = Objects.requireNonNull(directory);
+        this.filePrefix = Objects.requireNonNull(filePrefix);
+    }
+
+    /**
+     * Launch an instance of WalletAppKit with asynchronous startup. Wait until the PeerGroup is initialized.
+     *
+     * @param network The network the wallet connects to
+     * @param directory The directory for creating {@code .wallet} and {@code .spvchain} files
+     * @param filePrefix The base name for the {@code .wallet} and {@code .spvchain} files
+     * @return the instance
+     */
+    public static WalletAppKit launch(BitcoinNetwork network, File directory, String filePrefix) {
+        return WalletAppKit.launch(network, directory, filePrefix, 0);
+    }
+
+    /**
+     * Launch an instance of WalletAppKit with asynchronous startup. Wait until the PeerGroup is initialized.
+     *
+     * @param network The network the wallet connects to
+     * @param directory The directory for creating {@code .wallet} and {@code .spvchain} files
+     * @param filePrefix The base name for the {@code .wallet} and {@code .spvchain} files
+     * @param configurer Callback to allow configuring the kit before it is started
+     * @return the instance
+     */
+    public static WalletAppKit launch(BitcoinNetwork network, File directory, String filePrefix, Consumer<WalletAppKit> configurer) {
+        return WalletAppKit.launch(network, directory, filePrefix, configurer, 0);
+    }
+
+    /**
+     * Launch an instance of WalletAppKit with asynchronous startup. Wait until the PeerGroup is initialized.
+     *
+     * @param network The network the wallet connects to
+     * @param directory The directory for creating {@code .wallet} and {@code .spvchain} files
+     * @param filePrefix The base name for the {@code .wallet} and {@code .spvchain} files
+     * @param maxConnections maximum number of peer connections.
+     * @return the instance
+     */
+    public static WalletAppKit launch(BitcoinNetwork network, File directory, String filePrefix, int maxConnections) {
+        return WalletAppKit.launch(network, directory, filePrefix, (c) -> {}, maxConnections);
+    }
+
+    /**
+     * Launch an instance of WalletAppKit with asynchronous startup. Wait until the PeerGroup is initialized.
+     *
+     * @param network The network the wallet connects to
+     * @param directory The directory for creating {@code .wallet} and {@code .spvchain} files
+     * @param filePrefix The base name for the {@code .wallet} and {@code .spvchain} files
+     * @param configurer Callback to allow configuring the kit before it is started
+     * @param maxConnections maximum number of peer connections.
+     * @return the instance
+     */
+    public static WalletAppKit launch(BitcoinNetwork network, File directory, String filePrefix, Consumer<WalletAppKit> configurer, int maxConnections) {
+        WalletAppKit kit = new WalletAppKit(network,
+                ScriptType.P2WPKH,
+                KeyChainGroupStructure.BIP32,
+                directory,
+                filePrefix);
+
+        if (network == BitcoinNetwork.REGTEST) {
+            // Regression test mode is designed for testing and development only, so there's no public network for it.
+            // If you pick this mode, you're expected to be running a local "bitcoind -regtest" instance.
+            kit.connectToLocalHost();
+        }
+
+        kit.setBlockingStartup(false);  // Don't wait for blockchain synchronization before entering RUNNING state
+        configurer.accept(kit);         // Call configurer before startup
+        kit.startAsync();               // Connect to the network and start downloading transactions
+        kit.awaitRunning();             // Wait for the service to reach the RUNNING state
+        if (maxConnections > 0) {
+            kit.peerGroup().setMaxConnections(maxConnections);
+        }
+        return kit;
     }
 
     /** Will only connect to the given addresses. Cannot be called after startup. */
     public WalletAppKit setPeerNodes(PeerAddress... addresses) {
-        checkState(state() == State.NEW, "Cannot call after startup");
+        checkState(state() == State.NEW, () ->
+                "cannot call after startup");
         this.peerAddresses = addresses;
         return this;
     }
 
     /** Will only connect to localhost. Cannot be called after startup. */
     public WalletAppKit connectToLocalHost() {
-        try {
-            final InetAddress localHost = InetAddress.getLocalHost();
-            return setPeerNodes(new PeerAddress(params, localHost, params.getPort()));
-        } catch (UnknownHostException e) {
-            // Borked machine with no loopback adapter configured properly.
-            throw new RuntimeException(e);
-        }
+        return setPeerNodes(PeerAddress.localhost(params));
     }
 
     /** If true, the wallet will save itself to disk automatically whenever it changes. */
     public WalletAppKit setAutoSave(boolean value) {
-        checkState(state() == State.NEW, "Cannot call after startup");
+        checkState(state() == State.NEW, () ->
+                "cannot call after startup");
         useAutoSave = value;
         return this;
     }
@@ -179,7 +250,7 @@ public class WalletAppKit extends AbstractIdleService {
      * too, due to some missing implementation code.
      */
     public WalletAppKit setDownloadListener(DownloadProgressTracker listener) {
-        checkNotNull(listener);
+        Objects.requireNonNull(listener);
         this.downloadListener = listener;
         return this;
     }
@@ -198,7 +269,7 @@ public class WalletAppKit extends AbstractIdleService {
     public WalletAppKit setCheckpoints(InputStream checkpoints) {
         if (this.checkpoints != null)
             Closeables.closeQuietly(checkpoints);
-        this.checkpoints = checkNotNull(checkpoints);
+        this.checkpoints = Objects.requireNonNull(checkpoints);
         return this;
     }
 
@@ -219,8 +290,8 @@ public class WalletAppKit extends AbstractIdleService {
      * @param version A short string that contains the version number, e.g. "1.0-BETA"
      */
     public WalletAppKit setUserAgent(String userAgent, String version) {
-        this.userAgent = checkNotNull(userAgent);
-        this.version = checkNotNull(version);
+        this.userAgent = Objects.requireNonNull(userAgent);
+        this.version = Objects.requireNonNull(version);
         return this;
     }
 
@@ -230,7 +301,7 @@ public class WalletAppKit extends AbstractIdleService {
      * @return WalletAppKit for method chaining purposes
      */
     public WalletAppKit setWalletFactory(@Nonnull WalletProtobufSerializer.WalletFactory walletFactory) {
-        checkNotNull(walletFactory);
+        Objects.requireNonNull(walletFactory);
         this.walletFactory = walletFactory;
         return this;
     }
@@ -335,15 +406,15 @@ public class WalletAppKit extends AbstractIdleService {
 
             if (checkpoints != null) {
                 // Initialize the chain file with a checkpoint to speed up first-run sync.
-                long time;
+                Instant time;
                 if (restoreFromSeed != null) {
-                    time = restoreFromSeed.getCreationTimeSeconds();
+                    time = restoreFromSeed.creationTime().orElse(Instant.EPOCH);
                     if (chainFileExists) {
                         log.info("Clearing the chain file in preparation for restore.");
                         vStore.clear();
                     }
                 } else if (restoreFromKey != null) {
-                    time = restoreFromKey.getCreationTimeSeconds();
+                    time = restoreFromKey.creationTime().orElse(Instant.EPOCH);
                     if (chainFileExists) {
                         log.info("Clearing the chain file in preparation for restore.");
                         vStore.clear();
@@ -351,9 +422,9 @@ public class WalletAppKit extends AbstractIdleService {
                 }
                 else
                 {
-                    time = vWallet.getEarliestKeyCreationTime();
+                    time = vWallet.earliestKeyCreationTime();
                 }
-                if (time > 0)
+                if (time.isAfter(Instant.EPOCH))
                     CheckpointManager.checkpoint(params, checkpoints, vStore, time);
                 else
                     log.warn("Creating a new uncheckpointed block store due to a wallet with a creation time of zero: this will result in a very slow chain sync");
@@ -500,6 +571,11 @@ public class WalletAppKit extends AbstractIdleService {
         }
     }
 
+    @Override
+    public void close() {
+        stopAsync();
+    }
+
     public BitcoinNetwork network() {
         return network;
     }
@@ -509,22 +585,26 @@ public class WalletAppKit extends AbstractIdleService {
     }
 
     public BlockChain chain() {
-        checkState(state() == State.STARTING || state() == State.RUNNING, "Cannot call until startup is complete");
+        checkState(state() == State.STARTING || state() == State.RUNNING, () ->
+                "cannot call until startup is complete");
         return vChain;
     }
 
     public BlockStore store() {
-        checkState(state() == State.STARTING || state() == State.RUNNING, "Cannot call until startup is complete");
+        checkState(state() == State.STARTING || state() == State.RUNNING, () ->
+                "cannot call until startup is complete");
         return vStore;
     }
 
     public Wallet wallet() {
-        checkState(state() == State.STARTING || state() == State.RUNNING, "Cannot call until startup is complete");
+        checkState(state() == State.STARTING || state() == State.RUNNING, () ->
+                "cannot call until startup is complete");
         return vWallet;
     }
 
     public PeerGroup peerGroup() {
-        checkState(state() == State.STARTING || state() == State.RUNNING, "Cannot call until startup is complete");
+        checkState(state() == State.STARTING || state() == State.RUNNING, () ->
+                "cannot call until startup is complete");
         return vPeerGroup;
     }
 

@@ -18,7 +18,7 @@
 package org.bitcoinj.core;
 
 import com.google.common.io.BaseEncoding;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.params.MainNetParams;
 import org.bitcoinj.params.TestNet3Params;
 import org.junit.Test;
@@ -75,8 +75,8 @@ public class BitcoinSerializerTest {
         serializer.serialize(addressMessage, bos);
         assertEquals(31, addressMessage.getMessageSize());
 
-        addressMessage.addAddress(new PeerAddress(MAINNET, InetAddress.getLocalHost(), MAINNET.getPort(),
-                BigInteger.ZERO, serializer.withProtocolVersion(1)));
+        addressMessage.addAddress(new PeerAddress(InetAddress.getLocalHost(), MAINNET.getPort(),
+                Services.none(), new DummySerializer(1)));
         bos = new ByteArrayOutputStream(61);
         serializer.serialize(addressMessage, bos);
         assertEquals(61, addressMessage.getMessageSize());
@@ -92,18 +92,15 @@ public class BitcoinSerializerTest {
 
     @Test
     public void testCachedParsing() throws Exception {
-        MessageSerializer serializer = MAINNET.getSerializer(true);
+        // "retained mode" was removed from Message, so maybe this test doesn't make much sense any more
+
+        MessageSerializer serializer = MAINNET.getSerializer();
         
         // first try writing to a fields to ensure uncaching and children are not affected
         Transaction transaction = (Transaction) serializer.deserialize(ByteBuffer.wrap(TRANSACTION_MESSAGE_BYTES));
         assertNotNull(transaction);
-        assertTrue(transaction.isCached());
 
         transaction.setLockTime(1);
-        // parent should have been uncached
-        assertFalse(transaction.isCached());
-        // child should remain cached.
-        assertTrue(transaction.getInputs().get(0).isCached());
 
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         serializer.serialize(transaction, bos);
@@ -112,13 +109,8 @@ public class BitcoinSerializerTest {
         // now try writing to a child to ensure uncaching is propagated up to parent but not to siblings
         transaction = (Transaction) serializer.deserialize(ByteBuffer.wrap(TRANSACTION_MESSAGE_BYTES));
         assertNotNull(transaction);
-        assertTrue(transaction.isCached());
 
         transaction.getInputs().get(0).setSequenceNumber(1);
-        // parent should have been uncached
-        assertFalse(transaction.isCached());
-        // so should child
-        assertFalse(transaction.getInputs().get(0).isCached());
 
         bos = new ByteArrayOutputStream();
         serializer.serialize(transaction, bos);
@@ -127,7 +119,6 @@ public class BitcoinSerializerTest {
         // deserialize/reserialize to check for equals.
         transaction = (Transaction) serializer.deserialize(ByteBuffer.wrap(TRANSACTION_MESSAGE_BYTES));
         assertNotNull(transaction);
-        assertTrue(transaction.isCached());
         bos = new ByteArrayOutputStream();
         serializer.serialize(transaction, bos);
         assertArrayEquals(TRANSACTION_MESSAGE_BYTES, bos.toByteArray());
@@ -135,7 +126,6 @@ public class BitcoinSerializerTest {
         // deserialize/reserialize to check for equals.  Set a field to it's existing value to trigger uncache
         transaction = (Transaction) serializer.deserialize(ByteBuffer.wrap(TRANSACTION_MESSAGE_BYTES));
         assertNotNull(transaction);
-        assertTrue(transaction.isCached());
 
         transaction.getInputs().get(0).setSequenceNumber(transaction.getInputs().get(0).getSequenceNumber());
 
@@ -243,7 +233,7 @@ public class BitcoinSerializerTest {
 
         Message unknownMessage = new Message() {
             @Override
-            protected void parse() throws ProtocolException {
+            protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
             }
         };
         ByteArrayOutputStream bos = new ByteArrayOutputStream(ADDRESS_MESSAGE_BYTES.length);

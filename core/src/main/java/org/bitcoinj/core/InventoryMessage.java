@@ -16,7 +16,9 @@
 
 package org.bitcoinj.core;
 
-import static com.google.common.base.Preconditions.checkArgument;
+import java.nio.ByteBuffer;
+
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
 
 /**
  * <p>Represents the "inv" P2P network message. An inv contains a list of hashes of either blocks or transactions. It's
@@ -31,26 +33,18 @@ public class InventoryMessage extends ListMessage {
     /** A hard coded constant in the protocol. */
     public static final int MAX_INV_SIZE = 50000;
 
-    public InventoryMessage(NetworkParameters params, byte[] bytes) throws ProtocolException {
-        super(params, bytes);
-    }
-
     /**
      * Deserializes an 'inv' message.
-     * @param params NetworkParameters object.
      * @param payload Bitcoin protocol formatted byte array containing message content.
-     * @param serializer the serializer to use for this message.
-     * @param length The length of message if known.  Usually this is provided when deserializing of the wire
-     * as the length will be provided as part of the header.  If unknown then set to Message.UNKNOWN_LENGTH
      * @throws ProtocolException
      */
-    public InventoryMessage(NetworkParameters params, byte[] payload, MessageSerializer serializer, int length)
+    public InventoryMessage(ByteBuffer payload)
             throws ProtocolException {
-        super(params, payload, serializer, length);
+        super(payload);
     }
 
-    public InventoryMessage(NetworkParameters params) {
-        super(params);
+    public InventoryMessage() {
+        super();
     }
 
     public void addBlock(Block block) {
@@ -64,7 +58,7 @@ public class InventoryMessage extends ListMessage {
     /** Creates a new inv message for the given transactions. */
     public static InventoryMessage with(Transaction... txns) {
         checkArgument(txns.length > 0);
-        InventoryMessage result = new InventoryMessage(txns[0].getParams());
+        InventoryMessage result = new InventoryMessage();
         for (Transaction tx : txns)
             result.addTransaction(tx);
         return result;

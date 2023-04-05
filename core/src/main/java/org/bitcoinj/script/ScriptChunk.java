@@ -17,7 +17,7 @@
 
 package org.bitcoinj.script;
 
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 
 import javax.annotation.Nullable;
 import java.io.ByteArrayOutputStream;
@@ -26,7 +26,7 @@ import java.io.OutputStream;
 import java.util.Arrays;
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 import static org.bitcoinj.script.ScriptOpCodes.OP_0;
 import static org.bitcoinj.script.ScriptOpCodes.OP_1;
 import static org.bitcoinj.script.ScriptOpCodes.OP_16;
@@ -120,11 +120,11 @@ public class ScriptChunk {
             } else if (opcode == OP_PUSHDATA2) {
                 checkState(data.length <= 0xFFFF);
                 stream.write(OP_PUSHDATA2);
-                ByteUtils.uint16ToByteStreamLE(data.length, stream);
+                ByteUtils.writeInt16LE(data.length, stream);
             } else if (opcode == OP_PUSHDATA4) {
                 checkState(data.length <= Script.MAX_SCRIPT_ELEMENT_SIZE);
                 stream.write(OP_PUSHDATA4);
-                ByteUtils.uint32ToByteStreamLE(data.length, stream);
+                ByteUtils.writeInt32LE(data.length, stream);
             } else {
                 throw new RuntimeException("Unimplemented");
             }

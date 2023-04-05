@@ -62,7 +62,7 @@ public class TestWithWallet {
 
     @BeforeClass
     public static void setUpClass() throws Exception {
-        TimeUtils.resetMocking();
+        TimeUtils.clearMockClock();
     }
 
     public void setUp() throws Exception {
@@ -71,7 +71,7 @@ public class TestWithWallet {
         wallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH, KeyChainGroupStructure.BIP32);
         myKey = wallet.freshReceiveKey();
         myAddress = wallet.freshReceiveAddress(ScriptType.P2PKH);
-        blockStore = new MemoryBlockStore(TESTNET);
+        blockStore = new MemoryBlockStore(TESTNET.getGenesisBlock());
         chain = new BlockChain(TESTNET, wallet, blockStore);
     }
 
@@ -106,7 +106,7 @@ public class TestWithWallet {
 
     @Nullable
     protected Transaction sendMoneyToWallet(Wallet wallet, AbstractBlockChain.NewBlockType type, Coin value, ECKey toPubKey) throws VerificationException {
-        return sendMoneyToWallet(wallet, type, createFakeTx(TESTNET, value, toPubKey));
+        return sendMoneyToWallet(wallet, type, createFakeTx(value, toPubKey));
     }
 
     @Nullable

@@ -18,8 +18,9 @@
 package org.bitcoinj.params;
 
 import org.bitcoinj.base.BitcoinNetwork;
+import org.bitcoinj.base.internal.Stopwatch;
 import org.bitcoinj.base.internal.TimeUtils;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.core.BitcoinSerializer;
 import org.bitcoinj.core.Block;
 import org.bitcoinj.base.Coin;
@@ -42,7 +43,7 @@ import java.time.temporal.Temporal;
 import java.time.temporal.TemporalUnit;
 import java.util.concurrent.TimeUnit;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * Parameters for Bitcoin-like networks.
@@ -59,7 +60,7 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
     /**
      * Block reward halving interval (number of blocks)
      */
-    public static final int REWARD_HALVING_INTERVAL = 210000;
+    public static final int REWARD_HALVING_INTERVAL = 210_000;
 
     private static final Logger log = LoggerFactory.getLogger(BitcoinNetworkParams.class);
 
@@ -178,7 +179,7 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
 
         // We need to find a block far back in the chain. It's OK that this is expensive because it only occurs every
         // two weeks after the initial block chain download.
-        Instant start = TimeUtils.currentTime();
+        Stopwatch watch = Stopwatch.start();
         Sha256Hash hash = prev.getHash();
         StoredBlock cursor = null;
         final int interval = this.getInterval();
@@ -191,11 +192,11 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
             }
             hash = cursor.getHeader().getPrevBlockHash();
         }
-        checkState(cursor != null && isDifficultyTransitionPoint(cursor.getHeight() - 1),
-                "Didn't arrive at a transition point.");
-        Duration elapsed = TimeUtils.elapsedTime(start);
-        if (elapsed.toMillis() > 50)
-            log.info("Difficulty transition traversal took {} ms", elapsed.toMillis());
+        checkState(cursor != null && isDifficultyTransitionPoint(cursor.getHeight() - 1), () ->
+                "didn't arrive at a transition point");
+        watch.stop();
+        if (watch.elapsed().toMillis() > 50)
+            log.info("Difficulty transition traversal took {}", watch);
 
         Block blockIntervalAgo = cursor.getHeader();
         int timespan = (int) (prev.getTimeSeconds() - blockIntervalAgo.getTimeSeconds());
@@ -210,9 +211,12 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
         newTarget = newTarget.multiply(BigInteger.valueOf(timespan));
         newTarget = newTarget.divide(BigInteger.valueOf(targetTimespan));
 
-        if (newTarget.compareTo(this.getMaxTarget()) > 0) {
-            log.info("Difficulty hit proof of work limit: {}", newTarget.toString(16));
-            newTarget = this.getMaxTarget();
+        BigInteger maxTarget = this.getMaxTarget();
+        if (newTarget.compareTo(maxTarget) > 0) {
+            log.info("Difficulty hit proof of work limit: {} vs {}",
+                    Long.toHexString(ByteUtils.encodeCompactBits(newTarget)),
+                    Long.toHexString(ByteUtils.encodeCompactBits(maxTarget)));
+            newTarget = maxTarget;
         }
 
         int accuracyBytes = (int) (nextBlock.getDifficultyTarget() >>> 24) - 3;
@@ -249,8 +253,8 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
     }
 
     @Override
-    public BitcoinSerializer getSerializer(boolean parseRetain) {
-        return new BitcoinSerializer(this, parseRetain);
+    public BitcoinSerializer getSerializer() {
+        return new BitcoinSerializer(this);
     }
 
     @Override

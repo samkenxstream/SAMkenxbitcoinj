@@ -42,12 +42,15 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.DigestOutputStream;
 import java.security.MessageDigest;
-import java.util.*;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.TreeMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Future;
 
-import static com.google.common.base.Preconditions.checkState;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * Downloads and verifies a full chain from your local peer, emitting checkpoints at each difficulty transition period
@@ -97,7 +100,7 @@ public class BuildCheckpoints implements Callable<Integer> {
 
         // Configure bitcoinj to fetch only headers, not save them to disk, connect to a local fully synced/validated
         // node and to save block headers that are on interval boundaries, as long as they are <1 month old.
-        final BlockStore store = new MemoryBlockStore(params);
+        final BlockStore store = new MemoryBlockStore(params.getGenesisBlock());
         final BlockChain chain = new BlockChain(params, store);
         final PeerGroup peerGroup = new PeerGroup(net, chain);
 
@@ -135,17 +138,18 @@ public class BuildCheckpoints implements Callable<Integer> {
         // Sorted map of block height to StoredBlock object.
         final TreeMap<Integer, StoredBlock> checkpoints = new TreeMap<>();
 
-        long now = new Date().getTime() / 1000;
-        peerGroup.setFastCatchupTimeSecs(now);
+        Instant now = TimeUtils.currentTime();
+        peerGroup.setFastCatchupTime(now);
 
-        final long timeAgo = now - (86400 * days);
-        System.out.println("Checkpointing up to " + TimeUtils.dateTimeFormat(timeAgo * 1000));
+        Instant timeAgo = now.minus(days, ChronoUnit.DAYS);
+        System.out.println("Checkpointing up to " + TimeUtils.dateTimeFormat(timeAgo));
 
         chain.addNewBestBlockListener(Threading.SAME_THREAD, block -> {
             int height = block.getHeight();
-            if (height % params.getInterval() == 0 && block.getHeader().getTimeSeconds() <= timeAgo) {
+            if (height % params.getInterval() == 0 && timeAgo.isAfter(block.getHeader().time())) {
                 System.out.println(String.format("Checkpointing block %s at height %d, time %s",
-                        block.getHeader().getHash(), block.getHeight(), TimeUtils.dateTimeFormat(block.getHeader().getTime())));
+                        block.getHeader().getHash(), block.getHeight(),
+                        TimeUtils.dateTimeFormat(block.getHeader().time())));
                 checkpoints.put(height, block);
             }
         });
@@ -222,17 +226,17 @@ public class BuildCheckpoints implements Callable<Integer> {
         checkState(manager.numCheckpoints() == expectedSize);
 
         if (params.network() == BitcoinNetwork.MAINNET) {
-            StoredBlock test = manager.getCheckpointBefore(1390500000); // Thu Jan 23 19:00:00 CET 2014
+            StoredBlock test = manager.getCheckpointBefore(Instant.ofEpochSecond(1390500000)); // Thu Jan 23 19:00:00 CET 2014
             checkState(test.getHeight() == 280224);
             checkState(test.getHeader().getHashAsString()
                     .equals("00000000000000000b5d59a15f831e1c45cb688a4db6b0a60054d49a9997fa34"));
         } else if (params.network() == BitcoinNetwork.TESTNET) {
-            StoredBlock test = manager.getCheckpointBefore(1390500000); // Thu Jan 23 19:00:00 CET 2014
+            StoredBlock test = manager.getCheckpointBefore(Instant.ofEpochSecond(1390500000)); // Thu Jan 23 19:00:00 CET 2014
             checkState(test.getHeight() == 167328);
             checkState(test.getHeader().getHashAsString()
                     .equals("0000000000035ae7d5025c2538067fe7adb1cf5d5d9c31b024137d9090ed13a9"));
         } else if (params.network() == BitcoinNetwork.SIGNET) {
-            StoredBlock test = manager.getCheckpointBefore(1642000000); // 2022-01-12
+            StoredBlock test = manager.getCheckpointBefore(Instant.ofEpochSecond(1642000000)); // 2022-01-12
             checkState(test.getHeight() == 72576);
             checkState(test.getHeader().getHashAsString()
                     .equals("0000008f763bdf23bd159a21ccf211098707671d2ca9aa72d0f586c24505c5e7"));
@@ -240,7 +244,7 @@ public class BuildCheckpoints implements Callable<Integer> {
     }
 
     private static void startPeerGroup(PeerGroup peerGroup, InetAddress ipAddress) {
-        final PeerAddress peerAddress = new PeerAddress(params, ipAddress);
+        final PeerAddress peerAddress = new PeerAddress(ipAddress, params.getPort());
         System.out.println("Connecting to " + peerAddress + "...");
         peerGroup.addAddress(peerAddress);
         peerGroup.start();

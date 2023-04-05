@@ -19,6 +19,7 @@ package org.bitcoinj.base.utils;
 import org.bitcoinj.base.Coin;
 import org.bitcoinj.base.Monetary;
 
+import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
@@ -27,14 +28,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.math.LongMath.checkedPow;
-import static com.google.common.math.LongMath.divide;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>
- * Utility for formatting and parsing coin values to and from human readable form.
+ * Utility for formatting and parsing coin values to and from human-readable form.
  * </p>
  * 
  * <p>
@@ -92,8 +91,10 @@ public final class MonetaryFormat {
      * Set character to prefix negative values.
      */
     public MonetaryFormat negativeSign(char negativeSign) {
-        checkArgument(!Character.isDigit(negativeSign));
-        checkArgument(negativeSign > 0);
+        checkArgument(!Character.isDigit(negativeSign), () ->
+                "negativeSign can't be digit: " + negativeSign);
+        checkArgument(negativeSign > 0, () ->
+                "negativeSign must be positive: " + negativeSign);
         if (negativeSign == this.negativeSign)
             return this;
         else
@@ -106,7 +107,8 @@ public final class MonetaryFormat {
      * sign will always be interpreted as if the positive sign was used.
      */
     public MonetaryFormat positiveSign(char positiveSign) {
-        checkArgument(!Character.isDigit(positiveSign));
+        checkArgument(!Character.isDigit(positiveSign), () ->
+                "positiveSign can't be digit: " + positiveSign);
         if (positiveSign == this.positiveSign)
             return this;
         else
@@ -130,8 +132,10 @@ public final class MonetaryFormat {
      * used either.
      */
     public MonetaryFormat decimalMark(char decimalMark) {
-        checkArgument(!Character.isDigit(decimalMark));
-        checkArgument(decimalMark > 0);
+        checkArgument(!Character.isDigit(decimalMark), () ->
+                "decimalMark can't be digit: " + decimalMark);
+        checkArgument(decimalMark > 0, () ->
+                "decimalMark must be positive: " + decimalMark);
         if (decimalMark == this.decimalMark)
             return this;
         else
@@ -194,7 +198,8 @@ public final class MonetaryFormat {
      *            number of repetitions
      */
     public MonetaryFormat repeatOptionalDecimals(int decimals, int repetitions) {
-        checkArgument(repetitions >= 0);
+        checkArgument(repetitions >= 0, () ->
+                "repetitions cannot be negative: " + repetitions);
         List<Integer> decimalGroups = new ArrayList<>(repetitions);
         for (int i = 0; i < repetitions; i++)
             decimalGroups.add(decimals);
@@ -245,7 +250,8 @@ public final class MonetaryFormat {
      *            currency code
      */
     public MonetaryFormat code(int codeShift, String code) {
-        checkArgument(codeShift >= 0);
+        checkArgument(codeShift >= 0, () ->
+                "codeShift cannot be negative: " + codeShift);
         final String[] codes = null == this.codes
             ? new String[MAX_DECIMALS]
             : Arrays.copyOf(this.codes, this.codes.length);
@@ -259,8 +265,10 @@ public final class MonetaryFormat {
      * Separator between currency code and formatted value. This configuration is not relevant for parsing.
      */
     public MonetaryFormat codeSeparator(char codeSeparator) {
-        checkArgument(!Character.isDigit(codeSeparator));
-        checkArgument(codeSeparator > 0);
+        checkArgument(!Character.isDigit(codeSeparator), () ->
+                "codeSeparator can't be digit: " + codeSeparator);
+        checkArgument(codeSeparator > 0, () ->
+                "codeSeparator must be positive: " + codeSeparator);
         if (codeSeparator == this.codeSeparator)
             return this;
         else
@@ -350,32 +358,31 @@ public final class MonetaryFormat {
     }
 
     /**
-     * Format the given monetary value to a human readable form.
+     * Format the given monetary value to a human-readable form.
      */
     public CharSequence format(Monetary monetary) {
-        // preparation
-        int maxDecimals = minDecimals;
+        // determine maximum number of decimals that can be visible in the formatted string
+        // (if all decimal groups were to be used)
+        int max = minDecimals;
         if (decimalGroups != null)
             for (int group : decimalGroups)
-                maxDecimals += group;
+                max += group;
+        final int maxVisibleDecimals = max;
+
         int smallestUnitExponent = monetary.smallestUnitExponent();
-        checkState(maxDecimals <= smallestUnitExponent,
-                "The maximum possible number of decimals (%s) cannot exceed %s.", maxDecimals, smallestUnitExponent);
+        checkState(maxVisibleDecimals <= smallestUnitExponent, () ->
+                "maxVisibleDecimals cannot exceed " + smallestUnitExponent + ": " + maxVisibleDecimals);
 
-        // rounding
+        // convert to decimal
         long satoshis = Math.abs(monetary.getValue());
-        int potentialDecimals = smallestUnitExponent - shift;
-        long precisionDivisor = checkedPow(10, potentialDecimals - maxDecimals);
-        satoshis = Math.multiplyExact(divide(satoshis, precisionDivisor, roundingMode), precisionDivisor);
-
-        // shifting
-        long shiftDivisor = checkedPow(10, potentialDecimals);
-        long numbers = satoshis / shiftDivisor;
-        long decimals = satoshis % shiftDivisor;
+        int decimalShift = smallestUnitExponent - shift;
+        DecimalNumber decimal = satoshisToDecimal(satoshis, roundingMode, decimalShift, maxVisibleDecimals);
+        long numbers = decimal.numbers;
+        long decimals = decimal.decimals;
 
         // formatting
-        String decimalsStr = potentialDecimals > 0 ? String.format(Locale.US,
-                "%0" + Integer.toString(potentialDecimals) + "d", decimals) : "";
+        String decimalsStr = decimalShift > 0 ? String.format(Locale.US,
+                "%0" + Integer.toString(decimalShift) + "d", decimals) : "";
         StringBuilder str = new StringBuilder(decimalsStr);
         while (str.length() > minDecimals && str.charAt(str.length() - 1) == '0')
             str.setLength(str.length() - 1); // trim trailing zero
@@ -420,7 +427,41 @@ public final class MonetaryFormat {
     }
 
     /**
-     * Parse a human readable coin value to a {@link Coin} instance.
+     * Convert a long number of satoshis to a decimal number of BTC
+     * @param satoshis number of satoshis
+     * @param roundingMode rounding mode
+     * @param decimalShift the number of places to move the decimal point to the left,
+     *                     coming from smallest unit (e.g. satoshi)
+     * @param maxVisibleDecimals the maximum number of decimals that can be visible in the formatted string
+     * @return private class with two longs
+     */
+    private static DecimalNumber satoshisToDecimal(long satoshis, RoundingMode roundingMode, int decimalShift,
+                                                   int maxVisibleDecimals) {
+        BigDecimal decimalSats = BigDecimal.valueOf(satoshis);
+        // shift the decimal point
+        decimalSats = decimalSats.movePointLeft(decimalShift);
+        // discard unwanted precision and round accordingly
+        decimalSats = decimalSats.setScale(maxVisibleDecimals, roundingMode);
+        // separate decimals from the number
+        BigDecimal[] separated = decimalSats.divideAndRemainder(BigDecimal.ONE);
+        return new DecimalNumber(
+                separated[0].longValue(),
+                separated[1].movePointRight(decimalShift).longValue()
+        );
+    }
+
+    private static class DecimalNumber {
+        final long numbers;
+        final long decimals;
+
+        private DecimalNumber(long numbers, long decimals) {
+            this.numbers = numbers;
+            this.decimals = decimals;
+        }
+    }
+
+    /**
+     * Parse a human-readable coin value to a {@link Coin} instance.
      * 
      * @throws NumberFormatException
      *             if the string cannot be parsed for some reason
@@ -430,7 +471,7 @@ public final class MonetaryFormat {
     }
 
     /**
-     * Parse a human readable fiat value to a {@link Fiat} instance.
+     * Parse a human-readable fiat value to a {@link Fiat} instance.
      * 
      * @throws NumberFormatException
      *             if the string cannot be parsed for some reason
@@ -440,7 +481,8 @@ public final class MonetaryFormat {
     }
 
     private long parseValue(String str, int smallestUnitExponent) {
-        checkState(DECIMALS_PADDING.length() >= smallestUnitExponent);
+        checkState(DECIMALS_PADDING.length() >= smallestUnitExponent, () ->
+                "smallestUnitExponent can't be higher than " + DECIMALS_PADDING.length() + ": " + smallestUnitExponent);
         if (str.isEmpty())
             throw new NumberFormatException("empty string");
         char first = str.charAt(0);

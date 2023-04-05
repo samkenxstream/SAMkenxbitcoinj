@@ -21,6 +21,7 @@ import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.ScriptType;
 import org.bitcoinj.base.Address;
 import org.bitcoinj.base.internal.PlatformUtils;
+import org.bitcoinj.base.internal.Stopwatch;
 import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.core.Block;
 import org.bitcoinj.core.Context;
@@ -39,7 +40,6 @@ import java.math.BigInteger;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
-import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -51,7 +51,7 @@ public class SPVBlockStoreTest {
 
     @BeforeClass
     public static void setUpClass() {
-        TimeUtils.resetMocking();
+        TimeUtils.clearMockClock();
     }
 
     @Before
@@ -145,20 +145,20 @@ public class SPVBlockStoreTest {
         // On slow machines, this test could fail. Then either add @Ignore or adapt the threshold and please report to
         // us.
         final int ITERATIONS = 100000;
-        final long THRESHOLD_MS = 2000;
+        final Duration THRESHOLD = Duration.ofSeconds(5);
         SPVBlockStore store = new SPVBlockStore(TESTNET, blockStoreFile);
-        Instant start = TimeUtils.currentTime();
+        Stopwatch watch = Stopwatch.start();
         for (int i = 0; i < ITERATIONS; i++) {
             // Using i as the nonce so that the block hashes are different.
-            Block block = new Block(TESTNET, 0, Sha256Hash.ZERO_HASH, Sha256Hash.ZERO_HASH, 0, 0, i,
+            Block block = new Block(0, Sha256Hash.ZERO_HASH, Sha256Hash.ZERO_HASH, 0, 0, i,
                     Collections.emptyList());
             StoredBlock b = new StoredBlock(block, BigInteger.ZERO, i);
             store.put(b);
             store.setChainHead(b);
         }
-        Duration elapsed = TimeUtils.elapsedTime(start);
-        assertTrue("took " + elapsed.toMillis() + " ms for " + ITERATIONS + " iterations",
-                elapsed.toMillis() < THRESHOLD_MS);
+        watch.stop();
+        assertTrue("took " + watch + " for " + ITERATIONS + " iterations",
+                watch.elapsed().compareTo(THRESHOLD) < 0);
         store.close();
     }
 

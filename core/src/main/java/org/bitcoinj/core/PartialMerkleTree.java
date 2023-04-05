@@ -20,18 +20,21 @@ package org.bitcoinj.core;
 
 import org.bitcoinj.base.Sha256Hash;
 import org.bitcoinj.base.VarInt;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.Buffers;
+import org.bitcoinj.base.internal.ByteUtils;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-import static org.bitcoinj.base.utils.ByteUtils.checkBitLE;
-import static org.bitcoinj.base.utils.ByteUtils.reverseBytes;
-import static org.bitcoinj.base.utils.ByteUtils.uint32ToByteStreamLE;
+import static org.bitcoinj.base.internal.ByteUtils.checkBitLE;
+import static org.bitcoinj.base.internal.ByteUtils.reverseBytes;
+import static org.bitcoinj.base.internal.ByteUtils.writeInt32LE;
 
 /**
  * <p>A data structure that contains proofs of block inclusion for one or more transactions, in an efficient manner.</p>
@@ -73,16 +76,16 @@ public class PartialMerkleTree extends Message {
     // txids and internal hashes
     private List<Sha256Hash> hashes;
     
-    public PartialMerkleTree(NetworkParameters params, byte[] payloadBytes, int offset) throws ProtocolException {
-        super(params, payloadBytes, offset);
+    public PartialMerkleTree(ByteBuffer payload) throws ProtocolException {
+        super(payload);
     }
 
     /**
      * Constructs a new PMT with the given bit set (little endian) and the raw list of hashes including internal hashes,
      * taking ownership of the list.
      */
-    public PartialMerkleTree(NetworkParameters params, byte[] bits, List<Sha256Hash> hashes, int origTxCount) {
-        super(params);
+    public PartialMerkleTree(byte[] bits, List<Sha256Hash> hashes, int origTxCount) {
+        super();
         this.matchedChildBits = bits;
         this.hashes = hashes;
         this.transactionCount = origTxCount;
@@ -92,7 +95,7 @@ public class PartialMerkleTree extends Message {
      * Calculates a PMT given the list of leaf hashes and which leaves need to be included. The relevant interior hashes
      * are calculated and a new PMT returned.
      */
-    public static PartialMerkleTree buildFromLeaves(NetworkParameters params, byte[] includeBits, List<Sha256Hash> allLeafHashes) {
+    public static PartialMerkleTree buildFromLeaves(byte[] includeBits, List<Sha256Hash> allLeafHashes) {
         // Calculate height of the tree.
         int height = 0;
         while (getTreeWidth(allLeafHashes.size(), height) > 1)
@@ -104,34 +107,30 @@ public class PartialMerkleTree extends Message {
         for (int i = 0; i < bitList.size(); i++)
             if (bitList.get(i))
                 ByteUtils.setBitLE(bits, i);
-        return new PartialMerkleTree(params, bits, hashes, allLeafHashes.size());
+        return new PartialMerkleTree(bits, hashes, allLeafHashes.size());
     }
 
     @Override
     public void bitcoinSerializeToStream(OutputStream stream) throws IOException {
-        uint32ToByteStreamLE(transactionCount, stream);
+        writeInt32LE(transactionCount, stream);
 
-        stream.write(new VarInt(hashes.size()).encode());
+        stream.write(VarInt.of(hashes.size()).serialize());
         for (Sha256Hash hash : hashes)
-            stream.write(hash.getReversedBytes());
+            stream.write(hash.serialize());
 
-        stream.write(new VarInt(matchedChildBits.length).encode());
+        stream.write(VarInt.of(matchedChildBits.length).serialize());
         stream.write(matchedChildBits);
     }
 
     @Override
-    protected void parse() throws ProtocolException {
-        transactionCount = (int)readUint32();
+    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        transactionCount = (int) ByteUtils.readUint32(payload);
 
-        int nHashes = readVarInt().intValue();
+        int nHashes = VarInt.read(payload).intValue();
         hashes = new ArrayList<>(Math.min(nHashes, Utils.MAX_INITIAL_ARRAY_LENGTH));
         for (int i = 0; i < nHashes; i++)
-            hashes.add(readHash());
-
-        int nFlagBytes = readVarInt().intValue();
-        matchedChildBits = readBytes(nFlagBytes);
-
-        length = cursor - offset;
+            hashes.add(Sha256Hash.read(payload));
+        matchedChildBits = Buffers.readLengthPrefixedBytes(payload);
     }
 
     // Based on CPartialMerkleTree::TraverseAndBuild in Bitcoin Core.

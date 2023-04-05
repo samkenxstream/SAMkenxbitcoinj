@@ -18,6 +18,8 @@ package org.bitcoinj.core;
 
 import org.bitcoinj.base.Sha256Hash;
 
+import java.nio.ByteBuffer;
+
 /**
  * <p>The "getheaders" command is structurally identical to "getblocks", but has different meaning. On receiving this
  * message a Bitcoin node returns matching blocks up to the limit, but without the bodies. It is useful as an
@@ -27,12 +29,12 @@ import org.bitcoinj.base.Sha256Hash;
  * <p>Instances of this class are not safe for use by multiple threads.</p>
  */
 public class GetHeadersMessage extends GetBlocksMessage {
-    public GetHeadersMessage(NetworkParameters params, BlockLocator locator, Sha256Hash stopHash) {
-        super(params, locator, stopHash);
+    public GetHeadersMessage(long protocolVersion, BlockLocator locator, Sha256Hash stopHash) {
+        super(protocolVersion, locator, stopHash);
     }
 
-    public GetHeadersMessage(NetworkParameters params, byte[] payload) throws ProtocolException {
-        super(params, payload);
+    public GetHeadersMessage(ByteBuffer payload) throws ProtocolException {
+        super(payload);
     }
 
     @Override

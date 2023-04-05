@@ -69,7 +69,7 @@ public abstract class NetworkParameters {
 
     protected BigInteger maxTarget;
     protected int port;
-    protected long packetMagic;  // Indicates message origin network and is used to seek to the next message when stream state is unknown.
+    protected int packetMagic;  // Indicates message origin network and is used to seek to the next message when stream state is unknown.
     protected int addressHeader;
     protected int p2shHeader;
     protected int dumpedPrivateKeyHeader;
@@ -300,7 +300,7 @@ public abstract class NetworkParameters {
      * The header bytes that identify the start of a packet on this network.
      * @return header bytes as a long
      */
-    public long getPacketMagic() {
+    public int getPacketMagic() {
         return packetMagic;
     }
 
@@ -308,6 +308,7 @@ public abstract class NetworkParameters {
      * First byte of a base58 encoded address. See {@link LegacyAddress}.
      * @return the header value
      */
+    @Deprecated
     public int getAddressHeader() {
         return addressHeader;
     }
@@ -316,6 +317,7 @@ public abstract class NetworkParameters {
      * First byte of a base58 encoded P2SH address.  P2SH addresses are defined as part of BIP0013.
      * @return the header value
      */
+    @Deprecated
     public int getP2SHHeader() {
         return p2shHeader;
     }
@@ -454,7 +456,7 @@ public abstract class NetworkParameters {
                     // As the serializers are intended to be immutable, creating
                     // two due to a race condition should not be a problem, however
                     // to be safe we ensure only one exists for each network.
-                    this.defaultSerializer = getSerializer(false);
+                    this.defaultSerializer = getSerializer();
                 }
             }
         }
@@ -463,10 +465,9 @@ public abstract class NetworkParameters {
 
     /**
      * Construct and return a custom serializer.
-     * @param parseRetain whether the serializer should retain the backing byte array of a message for fast re-serialization.
      * @return the serializer
      */
-    public abstract BitcoinSerializer getSerializer(boolean parseRetain);
+    public abstract BitcoinSerializer getSerializer();
 
     /**
      * The number of blocks in the last {@link #getMajorityWindow()} blocks
@@ -553,8 +554,9 @@ public abstract class NetworkParameters {
 
     public static enum ProtocolVersion {
         MINIMUM(70000),
+        @Deprecated
         PONG(60001),
-        BLOOM_FILTER(70000), // BIP37
+        BLOOM_FILTER(70001), // BIP37
         BLOOM_FILTER_BIP111(70011), // BIP111
         WITNESS_VERSION(70012),
         FEEFILTER(70013), // BIP133

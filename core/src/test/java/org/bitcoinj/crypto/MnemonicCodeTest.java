@@ -24,7 +24,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import static org.bitcoinj.base.internal.InternalUtils.WHITESPACE_SPLITTER;
 import static org.junit.Assert.assertEquals;
 
@@ -58,7 +58,7 @@ public class MnemonicCodeTest {
         wordList.remove(0);
     }
 
-    @Test(expected = MnemonicException.MnemonicLengthException.class)
+    @Test(expected = RuntimeException.class)
     public void testBadEntropyLength() throws Exception {
         byte[] entropy = ByteUtils.parseHex("7f7f7f7f7f7f7f7f7f7f7f7f7f7f");
         mc.toMnemonic(entropy);
@@ -88,7 +88,7 @@ public class MnemonicCodeTest {
         mc.check(words);
     }
 
-    @Test(expected = MnemonicException.MnemonicLengthException.class)
+    @Test(expected = RuntimeException.class)
     public void testEmptyEntropy() throws Exception {
         byte[] entropy = {};
         mc.toMnemonic(entropy);

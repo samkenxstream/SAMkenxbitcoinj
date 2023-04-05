@@ -44,9 +44,11 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.security.KeyStoreException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -253,27 +255,44 @@ public class PaymentSession {
     }
 
     /**
-     * Returns the date that the payment request was generated.
+     * Returns the time that the payment request was generated.
      */
+    public Instant time() {
+        return Instant.ofEpochSecond(paymentDetails.getTime());
+    }
+
+    /** @deprecated use {@link #time()} */
+    @Deprecated
     public Date getDate() {
-        return new Date(paymentDetails.getTime() * 1000);
+        return Date.from(time());
     }
 
     /**
-     * Returns the expires time of the payment request, or null if none.
+     * Returns the expires time of the payment request, or empty if none.
      */
-    @Nullable public Date getExpires() {
+    public Optional<Instant> expires() {
         if (paymentDetails.hasExpires())
-            return new Date(paymentDetails.getExpires() * 1000);
+            return Optional.of(Instant.ofEpochSecond(paymentDetails.getExpires()));
         else
-            return null;
+            return Optional.empty();
+    }
+
+    /** @deprecated use {@link #expires()} */
+    @Nullable
+    @Deprecated
+    public Date getExpires() {
+        return expires()
+                .map(Date::from)
+                .orElse(null);
     }
 
     /**
      * This should always be called before attempting to call sendPayment.
      */
     public boolean isExpired() {
-        return paymentDetails.hasExpires() && TimeUtils.currentTimeSeconds() > paymentDetails.getExpires();
+        return expires()
+                .map(time -> TimeUtils.currentTime().isAfter(time))
+                .orElse(false);
     }
 
     /**
@@ -301,9 +320,9 @@ public class PaymentSession {
      * Returns a {@link SendRequest} suitable for broadcasting to the network.
      */
     public SendRequest getSendRequest() {
-        Transaction tx = new Transaction(params);
+        Transaction tx = new Transaction();
         for (Protos.Output output : paymentDetails.getOutputsList())
-            tx.addOutput(new TransactionOutput(params, tx, Coin.valueOf(output.getAmount()), output.getScript().toByteArray()));
+            tx.addOutput(new TransactionOutput(tx, Coin.valueOf(output.getAmount()), output.getScript().toByteArray()));
         return SendRequest.forTx(tx).fromPaymentDetails(paymentDetails);
     }
 
@@ -323,7 +342,7 @@ public class PaymentSession {
         Protos.Payment payment = null;
         try {
             payment = getPayment(txns, refundAddr, memo);
-        } catch (IOException | PaymentProtocolException.InvalidNetwork e) {
+        } catch (IOException e) {
             return ListenableCompletableFuture.failedFuture(e);
         }
         if (payment == null)
@@ -349,11 +368,8 @@ public class PaymentSession {
      */
     @Nullable
     public Protos.Payment getPayment(List<Transaction> txns, @Nullable Address refundAddr, @Nullable String memo)
-            throws IOException, PaymentProtocolException.InvalidNetwork {
+            throws IOException {
         if (paymentDetails.hasPaymentUrl()) {
-            for (Transaction tx : txns)
-                if (!tx.getParams().equals(params))
-                    throw new PaymentProtocolException.InvalidNetwork(PaymentProtocol.protocolIdFromParams(params));
             return PaymentProtocol.createPaymentMessage(txns, totalValue, refundAddr, memo, getMerchantData());
         } else {
             return null;

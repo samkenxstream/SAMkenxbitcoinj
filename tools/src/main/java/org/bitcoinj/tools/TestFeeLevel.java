@@ -76,7 +76,7 @@ public class TestFeeLevel {
 
         Coin value = kit.wallet().getBalance().divide(2); // Keep a chunk for the fee.
         Coin outputValue = value.divide(numOutputs);
-        Transaction transaction = new Transaction(kit.params());
+        Transaction transaction = new Transaction();
         for (int i = 0; i < numOutputs - 1; i++) {
             transaction.addOutput(outputValue, kit.wallet().freshReceiveAddress());
             value = value.subtract(outputValue);
@@ -86,14 +86,14 @@ public class TestFeeLevel {
         request.feePerKb = feeRateToTest;
         request.ensureMinRequiredFee = false;
         kit.wallet().completeTx(request);
-        System.out.println("Size in bytes is " + request.tx.unsafeBitcoinSerialize().length);
+        System.out.println("Size in bytes is " + request.tx.bitcoinSerialize().length);
         System.out.println("TX is " + request.tx);
         System.out.println("Waiting for " + kit.peerGroup().getMaxConnections() + " connected peers");
         kit.peerGroup().addDisconnectedEventListener((peer, peerCount) -> System.out.println(peerCount +
                 " peers connected"));
         kit.peerGroup().addConnectedEventListener((peer, peerCount) -> System.out.println(peerCount +
                 " peers connected"));
-        kit.peerGroup().broadcastTransaction(request.tx).future().get();
+        kit.peerGroup().broadcastTransaction(request.tx).awaitRelayed().get();
         System.out.println("Send complete, waiting for confirmation");
         request.tx.getConfidence().getDepthFuture(1).get();
 

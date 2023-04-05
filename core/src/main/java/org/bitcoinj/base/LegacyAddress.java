@@ -19,7 +19,7 @@
 package org.bitcoinj.base;
 
 import org.bitcoinj.base.exceptions.AddressFormatException;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.core.NetworkParameters;
 
@@ -27,7 +27,11 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.Objects;
+import java.util.stream.Stream;
+
+import static org.bitcoinj.base.BitcoinNetwork.*;
 
 /**
  * <p>A Bitcoin address looks like 1MsScoe2fTJoq4ZPdQgqyhgWeoNamYPevy and is derived from an elliptic curve public key
@@ -40,17 +44,19 @@ import java.util.Objects;
  * should be interpreted. Whilst almost all addresses today are hashes of public keys, another (currently unsupported
  * type) can contain a hash of a script instead.</p>
  */
-public class LegacyAddress extends Address {
+public class LegacyAddress implements Address {
     /**
      * An address is a RIPEMD160 hash of a public key, therefore is always 160 bits or 20 bytes.
      */
     public static final int LENGTH = 20;
 
+    protected final Network network;
+    protected final byte[] bytes;
     /** True if P2SH, false if P2PKH. */
     public final boolean p2sh;
 
     /**
-     * Private constructor. Use {@link #fromBase58(Network, String)},
+     * Private constructor. Use {@link #fromBase58(String, Network)},
      * {@link #fromPubKeyHash(Network, byte[])}, {@link #fromScriptHash(Network, byte[])} or
      * {@link ECKey#toAddress(ScriptType, Network)}.
      *
@@ -62,7 +68,8 @@ public class LegacyAddress extends Address {
      *            20-byte hash of pubkey or script
      */
     private LegacyAddress(Network network, boolean p2sh, byte[] hash160) throws AddressFormatException {
-        super(normalizeNetwork(network), hash160);
+        this.network = normalizeNetwork(Objects.requireNonNull(network));
+        this.bytes = Objects.requireNonNull(hash160);
         if (hash160.length != 20)
             throw new AddressFormatException.InvalidDataLength(
                     "Legacy addresses are 20 byte (160 bit) hashes, but got: " + hash160.length);
@@ -162,7 +169,7 @@ public class LegacyAddress extends Address {
      *             if the given base58 doesn't parse or the checksum is invalid
      * @throws AddressFormatException.WrongNetwork
      *             if the given address is valid but for a different chain (eg testnet vs mainnet)
-     * @deprecated Use {@link #fromBase58(Network, String)}
+     * @deprecated Use {@link #fromBase58(String, Network)}
      */
     @Deprecated
     public static LegacyAddress fromBase58(@Nullable NetworkParameters params, String base58)
@@ -176,22 +183,31 @@ public class LegacyAddress extends Address {
     /**
      * Construct a {@link LegacyAddress} from its base58 form.
      *
+     * @param base58  base58-encoded textual form of the address
      * @param network expected network this address is valid for
-     * @param base58 base58-encoded textual form of the address
-     * @throws AddressFormatException if the given base58 doesn't parse or the checksum is invalid
+     * @throws AddressFormatException              if the given base58 doesn't parse or the checksum is invalid
      * @throws AddressFormatException.WrongNetwork if the given address is valid but for a different chain (eg testnet vs mainnet)
      */
-    public static LegacyAddress fromBase58(@Nonnull Network network, String base58)
+    public static LegacyAddress fromBase58(String base58, @Nonnull Network network)
             throws AddressFormatException, AddressFormatException.WrongNetwork {
-        NetworkParameters params = NetworkParameters.of(network);
         byte[] versionAndDataBytes = Base58.decodeChecked(base58);
         int version = versionAndDataBytes[0] & 0xFF;
         byte[] bytes = Arrays.copyOfRange(versionAndDataBytes, 1, versionAndDataBytes.length);
-        if (version == params.getAddressHeader())
+        if (version == network.legacyAddressHeader())
             return new LegacyAddress(network, false, bytes);
-        else if (version == params.getP2SHHeader())
+        else if (version == network.legacyP2SHHeader())
             return new LegacyAddress(network, true, bytes);
         throw new AddressFormatException.WrongNetwork(version);
+    }
+
+    /**
+     * Get the network this address works on. Use of {@link BitcoinNetwork} is preferred to use of {@link NetworkParameters}
+     * when you need to know what network an address is for.
+     * @return the Network.
+     */
+    @Override
+    public Network network() {
+        return network;
     }
 
     /**
@@ -200,8 +216,7 @@ public class LegacyAddress extends Address {
      * @return version header as one byte
      */
     public int getVersion() {
-        NetworkParameters params = NetworkParameters.of(network);
-        return p2sh ? params.getP2SHHeader() : params.getAddressHeader();
+        return p2sh ? network.legacyP2SHHeader() : network.legacyAddressHeader();
     }
 
     /**
@@ -250,12 +265,12 @@ public class LegacyAddress extends Address {
         if (o == null || getClass() != o.getClass())
             return false;
         LegacyAddress other = (LegacyAddress) o;
-        return super.equals(other) && this.p2sh == other.p2sh;
+        return this.network == other.network && Arrays.equals(this.bytes, other.bytes) && this.p2sh == other.p2sh;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), p2sh);
+        return Objects.hash(network, Arrays.hashCode(bytes), p2sh);
     }
 
     @Override
@@ -263,15 +278,10 @@ public class LegacyAddress extends Address {
         return toBase58();
     }
 
-    @Override
-    public LegacyAddress clone() throws CloneNotSupportedException {
-        return (LegacyAddress) super.clone();
-    }
-
     // Comparator for LegacyAddress, left argument must be LegacyAddress, right argument can be any Address
     private static final Comparator<Address> LEGACY_ADDRESS_COMPARATOR = Address.PARTIAL_ADDRESS_COMPARATOR
             .thenComparingInt(a -> ((LegacyAddress) a).getVersion())            // Then compare Legacy address version byte
-            .thenComparing(a -> a.bytes, ByteUtils.arrayUnsignedComparator());  // Then compare Legacy bytes
+            .thenComparing(a -> ((LegacyAddress) a).bytes, ByteUtils.arrayUnsignedComparator());  // Then compare Legacy bytes
 
     /**
      * {@inheritDoc}
@@ -282,5 +292,68 @@ public class LegacyAddress extends Address {
     @Override
     public int compareTo(Address o) {
        return LEGACY_ADDRESS_COMPARATOR.compare(this, o);
+    }
+
+    /**
+     * Address header of legacy P2PKH addresses for standard Bitcoin networks.
+     */
+    public enum AddressHeader {
+        X0(0, MAINNET),
+        X111(111, TESTNET, REGTEST),
+        X6F(0x6f, SIGNET);
+
+        private final int headerByte;
+        private final EnumSet<BitcoinNetwork> networks;
+
+        /**
+         * @param network network to find enum for
+         * @return the corresponding enum
+         */
+        public static AddressHeader ofNetwork(BitcoinNetwork network) {
+            return Stream.of(AddressHeader.values())
+                    .filter(header -> header.networks.contains(network))
+                    .findFirst()
+                    .orElseThrow(IllegalStateException::new);
+        }
+
+        AddressHeader(int headerByte, BitcoinNetwork first, BitcoinNetwork... rest) {
+            this.headerByte = headerByte;
+            this.networks = EnumSet.of(first, rest);
+        }
+
+        public int headerByte() {
+            return headerByte;
+        }
+    }
+
+    /**
+     * Address header of legacy P2SH addresses for standard Bitcoin networks.
+     */
+    public enum P2SHHeader {
+        X5(5, MAINNET),
+        X196(196, TESTNET, SIGNET, REGTEST);
+
+        private final int headerByte;
+        private final EnumSet<BitcoinNetwork> networks;
+
+        /**
+         * @param network network to find enum for
+         * @return the corresponding enum
+         */
+        public static P2SHHeader ofNetwork(BitcoinNetwork network) {
+            return Stream.of(P2SHHeader.values())
+                    .filter(header -> header.networks.contains(network))
+                    .findFirst()
+                    .orElseThrow(IllegalStateException::new);
+        }
+
+        P2SHHeader(int headerByte, BitcoinNetwork first, BitcoinNetwork... rest) {
+            this.headerByte = headerByte;
+            this.networks = EnumSet.of(first, rest);
+        }
+
+        public int headerByte() {
+            return headerByte;
+        }
     }
 }

@@ -36,11 +36,12 @@ import java.nio.Buffer;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.channels.NotYetConnectedException;
+import java.time.Duration;
+import java.util.Objects;
 import java.util.concurrent.locks.Lock;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * Handles high-level message (de)serialization for peers, acting as the bridge between the
@@ -66,13 +67,13 @@ public abstract class PeerSocketHandler implements TimeoutHandler, StreamConnect
     private BitcoinSerializer.BitcoinPacketHeader header;
 
     public PeerSocketHandler(NetworkParameters params, InetSocketAddress remoteIp) {
-        this(params, new PeerAddress(params, remoteIp));
+        this(params, new PeerAddress(remoteIp));
     }
 
     public PeerSocketHandler(NetworkParameters params, PeerAddress peerAddress) {
-        checkNotNull(params);
+        Objects.requireNonNull(params);
         serializer = params.getDefaultSerializer();
-        this.peerAddress = checkNotNull(peerAddress);
+        this.peerAddress = Objects.requireNonNull(peerAddress);
         this.timeoutTask = new SocketTimeoutTask(this::timeoutOccurred);
     }
 
@@ -82,8 +83,8 @@ public abstract class PeerSocketHandler implements TimeoutHandler, StreamConnect
     }
 
     @Override
-    public void setSocketTimeout(int timeoutMillis) {
-        timeoutTask.setSocketTimeout(timeoutMillis);
+    public void setSocketTimeout(Duration timeout) {
+        timeoutTask.setSocketTimeout(timeout);
     }
 
     /**

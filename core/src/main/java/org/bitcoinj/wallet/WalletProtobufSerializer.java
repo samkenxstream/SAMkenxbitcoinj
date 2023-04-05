@@ -22,9 +22,11 @@ import com.google.protobuf.CodedInputStream;
 import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.WireFormat;
 import org.bitcoinj.base.Coin;
+import org.bitcoinj.core.LockTime;
 import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.core.PeerAddress;
 import org.bitcoinj.base.Sha256Hash;
+import org.bitcoinj.core.Services;
 import org.bitcoinj.core.Transaction;
 import org.bitcoinj.core.TransactionConfidence;
 import org.bitcoinj.core.TransactionConfidence.ConfidenceType;
@@ -53,14 +55,15 @@ import java.io.OutputStream;
 import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-
-import static com.google.common.base.Preconditions.checkNotNull;
+import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Serialize and de-serialize a wallet to a byte stream containing a
@@ -187,7 +190,7 @@ public class WalletProtobufSerializer {
             Protos.Script protoScript =
                     Protos.Script.newBuilder()
                             .setProgram(ByteString.copyFrom(script.getProgram()))
-                            .setCreationTimestamp(script.getCreationTimeSeconds() * 1000)
+                            .setCreationTimestamp(script.creationTime().orElse(Instant.EPOCH).toEpochMilli())
                             .build();
 
             walletBuilder.addWatchedScript(protoScript);
@@ -199,8 +202,8 @@ public class WalletProtobufSerializer {
             walletBuilder.setLastSeenBlockHash(hashToByteString(lastSeenBlockHash));
             walletBuilder.setLastSeenBlockHeight(wallet.getLastBlockSeenHeight());
         }
-        if (wallet.getLastBlockSeenTimeSecs() > 0)
-            walletBuilder.setLastSeenBlockTimeSecs(wallet.getLastBlockSeenTimeSecs());
+        wallet.lastBlockSeenTime().ifPresent(
+                time -> walletBuilder.setLastSeenBlockTimeSecs(time.getEpochSecond()));
 
         // Populate the scrypt parameters.
         KeyCrypter keyCrypter = wallet.getKeyCrypter();
@@ -219,8 +222,9 @@ public class WalletProtobufSerializer {
             }
         }
 
-        if (wallet.getKeyRotationTime() != null) {
-            long timeSecs = wallet.getKeyRotationTime().getTime() / 1000;
+        Optional<Instant> keyRotationTime = wallet.keyRotationTime();
+        if (keyRotationTime.isPresent()) {
+            long timeSecs = keyRotationTime.get().getEpochSecond();
             walletBuilder.setKeyRotationTime(timeSecs);
         }
 
@@ -255,20 +259,20 @@ public class WalletProtobufSerializer {
                  .setHash(hashToByteString(tx.getTxId()))
                  .setVersion((int) tx.getVersion());
 
-        if (tx.getUpdateTime() != null) {
-            txBuilder.setUpdatedAt(tx.getUpdateTime().getTime());
-        }
+        tx.updateTime().ifPresent(
+                time -> txBuilder.setUpdatedAt(time.toEpochMilli()));
 
-        if (tx.getLockTime() > 0) {
-            txBuilder.setLockTime((int)tx.getLockTime());
+        LockTime locktime = tx.lockTime();
+        if (locktime.isSet()) {
+            txBuilder.setLockTime((int) locktime.rawValue());
         }
 
         // Handle inputs.
         for (TransactionInput input : tx.getInputs()) {
             Protos.TransactionInput.Builder inputBuilder = Protos.TransactionInput.newBuilder()
                 .setScriptBytes(ByteString.copyFrom(input.getScriptBytes()))
-                .setTransactionOutPointHash(hashToByteString(input.getOutpoint().getHash()))
-                .setTransactionOutPointIndex((int) input.getOutpoint().getIndex());
+                .setTransactionOutPointHash(hashToByteString(input.getOutpoint().hash()))
+                .setTransactionOutPointIndex((int) input.getOutpoint().index());
             if (input.hasSequence())
                 inputBuilder.setSequence((int) input.getSequenceNumber());
             if (input.getValue() != null)
@@ -384,13 +388,13 @@ public class WalletProtobufSerializer {
             Protos.PeerAddress proto = Protos.PeerAddress.newBuilder()
                     .setIpAddress(ByteString.copyFrom(address.getAddr().getAddress()))
                     .setPort(address.getPort())
-                    .setServices(address.getServices().longValue())
+                    .setServices(address.getServices().bits())
                     .build();
             confidenceBuilder.addBroadcastBy(proto);
         }
-        Date lastBroadcastedAt = confidence.getLastBroadcastedAt();
-        if (lastBroadcastedAt != null)
-            confidenceBuilder.setLastBroadcastedAt(lastBroadcastedAt.getTime());
+        confidence.lastBroadcastTime().ifPresent(
+                lastBroadcastTime -> confidenceBuilder.setLastBroadcastedAt(lastBroadcastTime.toEpochMilli())
+        );
         txBuilder.setConfidence(confidenceBuilder);
     }
 
@@ -499,9 +503,13 @@ public class WalletProtobufSerializer {
         List<Script> scripts = new ArrayList<>();
         for (Protos.Script protoScript : walletProto.getWatchedScriptList()) {
             try {
-                Script script =
-                        new Script(protoScript.getProgram().toByteArray(),
-                                protoScript.getCreationTimestamp() / 1000);
+                long creationTimestamp = protoScript.getCreationTimestamp();
+                byte[] programBytes = protoScript.getProgram().toByteArray();
+                Script script;
+                if (creationTimestamp > 0)
+                    script = new Script(programBytes, Instant.ofEpochMilli(creationTimestamp));
+                else
+                    script = new Script(programBytes);
                 scripts.add(script);
             } catch (ScriptException e) {
                 throw new UnreadableWalletException("Unparseable script in wallet");
@@ -518,7 +526,7 @@ public class WalletProtobufSerializer {
             // Should mirror Wallet.reset()
             wallet.setLastBlockSeenHash(null);
             wallet.setLastBlockSeenHeight(-1);
-            wallet.setLastBlockSeenTimeSecs(0);
+            wallet.clearLastBlockSeenTime();
         } else {
             // Read all transactions and insert into the txMap.
             for (Protos.Transaction txProto : walletProto.getTransactionList()) {
@@ -543,10 +551,10 @@ public class WalletProtobufSerializer {
                 wallet.setLastBlockSeenHeight(walletProto.getLastSeenBlockHeight());
             }
             // Will default to zero if not present.
-            wallet.setLastBlockSeenTimeSecs(walletProto.getLastSeenBlockTimeSecs());
+            wallet.setLastBlockSeenTime(Instant.ofEpochSecond(walletProto.getLastSeenBlockTimeSecs()));
 
             if (walletProto.hasKeyRotationTime()) {
-                wallet.setKeyRotationTime(new Date(walletProto.getKeyRotationTime() * 1000));
+                wallet.setKeyRotationTime(Instant.ofEpochSecond(walletProto.getKeyRotationTime()));
             }
         }
 
@@ -616,29 +624,33 @@ public class WalletProtobufSerializer {
     }
 
     private void readTransaction(Protos.Transaction txProto, NetworkParameters params) throws UnreadableWalletException {
-        Transaction tx = new Transaction(params);
+        Transaction tx = new Transaction();
 
         tx.setVersion(txProto.getVersion());
 
         if (txProto.hasUpdatedAt()) {
-            tx.setUpdateTime(new Date(txProto.getUpdatedAt()));
+            long updatedAt = txProto.getUpdatedAt();
+            if (updatedAt > 0)
+                tx.setUpdateTime(Instant.ofEpochMilli(updatedAt));
+            else
+                tx.clearUpdateTime();
         }
 
         for (Protos.TransactionOutput outputProto : txProto.getTransactionOutputList()) {
             Coin value = Coin.valueOf(outputProto.getValue());
             byte[] scriptBytes = outputProto.getScriptBytes().toByteArray();
-            TransactionOutput output = new TransactionOutput(params, tx, value, scriptBytes);
+            TransactionOutput output = new TransactionOutput(tx, value, scriptBytes);
             tx.addOutput(output);
         }
 
         for (Protos.TransactionInput inputProto : txProto.getTransactionInputList()) {
             byte[] scriptBytes = inputProto.getScriptBytes().toByteArray();
-            TransactionOutPoint outpoint = new TransactionOutPoint(params,
+            TransactionOutPoint outpoint = new TransactionOutPoint(
                     inputProto.getTransactionOutPointIndex() & 0xFFFFFFFFL,
                     byteStringToHash(inputProto.getTransactionOutPointHash())
             );
             Coin value = inputProto.hasValue() ? Coin.valueOf(inputProto.getValue()) : null;
-            TransactionInput input = new TransactionInput(params, tx, scriptBytes, outpoint, value);
+            TransactionInput input = new TransactionInput(tx, scriptBytes, outpoint, value);
             if (inputProto.hasSequence())
                 input.setSequenceNumber(0xffffffffL & inputProto.getSequence());
             if (inputProto.hasWitness()) {
@@ -730,7 +742,7 @@ public class WalletProtobufSerializer {
                             tx.getTxId(), byteStringToHash(spentByTransactionHash)));
                 }
                 final int spendingIndex = transactionOutput.getSpentByTransactionIndex();
-                TransactionInput input = checkNotNull(spendingTx.getInput(spendingIndex));
+                TransactionInput input = Objects.requireNonNull(spendingTx.getInput(spendingIndex));
                 input.connect(output);
             }
         }
@@ -802,12 +814,12 @@ public class WalletProtobufSerializer {
                 throw new UnreadableWalletException("Peer IP address does not have the right length", e);
             }
             int port = proto.getPort();
-            BigInteger services = BigInteger.valueOf(proto.getServices());
-            PeerAddress address = new PeerAddress(params, ip, port, services);
+            Services services = Services.of(proto.getServices());
+            PeerAddress address = new PeerAddress(ip, port, services);
             confidence.markBroadcastBy(address);
         }
         if (confidenceProto.hasLastBroadcastedAt())
-            confidence.setLastBroadcastedAt(new Date(confidenceProto.getLastBroadcastedAt()));
+            confidence.setLastBroadcastTime(Instant.ofEpochMilli(confidenceProto.getLastBroadcastedAt()));
         switch (confidenceProto.getSource()) {
             case SOURCE_SELF: confidence.setSource(TransactionConfidence.Source.SELF); break;
             case SOURCE_NETWORK: confidence.setSource(TransactionConfidence.Source.NETWORK); break;

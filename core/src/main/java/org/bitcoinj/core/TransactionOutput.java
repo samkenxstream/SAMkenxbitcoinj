@@ -19,10 +19,12 @@ package org.bitcoinj.core;
 
 import org.bitcoinj.base.Address;
 import org.bitcoinj.base.Coin;
+import org.bitcoinj.base.Network;
 import org.bitcoinj.base.ScriptType;
 import org.bitcoinj.base.Sha256Hash;
 import org.bitcoinj.base.VarInt;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.Buffers;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.script.Script;
 import org.bitcoinj.script.ScriptBuilder;
@@ -35,13 +37,15 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.check;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>A TransactionOutput message contains a scriptPubKey that controls who is able to spend its value. It is a sub-part
@@ -49,8 +53,10 @@ import static com.google.common.base.Preconditions.checkState;
  * 
  * <p>Instances of this class are not safe for use by multiple threads.</p>
  */
-public class TransactionOutput extends ChildMessage {
+public class TransactionOutput extends Message {
     private static final Logger log = LoggerFactory.getLogger(TransactionOutput.class);
+
+    @Nullable protected Transaction parent;
 
     // The output's value is kept as a native type in order to save class instances.
     private long value;
@@ -71,25 +77,13 @@ public class TransactionOutput extends ChildMessage {
 
     /**
      * Deserializes a transaction output message. This is usually part of a transaction message.
-     */
-    public TransactionOutput(NetworkParameters params, @Nullable Transaction parent, byte[] payload,
-                             int offset) throws ProtocolException {
-        super(params, payload, offset);
-        setParent(parent);
-        availableForSpending = true;
-    }
-
-    /**
-     * Deserializes a transaction output message. This is usually part of a transaction message.
      *
-     * @param params NetworkParameters object.
      * @param payload Bitcoin protocol formatted byte array containing message content.
-     * @param offset The location of the first payload byte within the array.
-     * @param serializer the serializer to use for this message.
      * @throws ProtocolException
      */
-    public TransactionOutput(NetworkParameters params, @Nullable Transaction parent, byte[] payload, int offset, MessageSerializer serializer) throws ProtocolException {
-        super(params, payload, offset, parent, serializer, UNKNOWN_LENGTH);
+    public TransactionOutput(@Nullable Transaction parent, ByteBuffer payload) throws ProtocolException {
+        super(payload);
+        setParent(parent);
         availableForSpending = true;
     }
 
@@ -98,8 +92,8 @@ public class TransactionOutput extends ChildMessage {
      * something like {@link Coin#valueOf(int, int)}. Typically you would use
      * {@link Transaction#addOutput(Coin, Address)} instead of creating a TransactionOutput directly.
      */
-    public TransactionOutput(NetworkParameters params, @Nullable Transaction parent, Coin value, Address to) {
-        this(params, parent, value, ScriptBuilder.createOutputScript(to).getProgram());
+    public TransactionOutput(@Nullable Transaction parent, Coin value, Address to) {
+        this(parent, value, ScriptBuilder.createOutputScript(to).getProgram());
     }
 
     /**
@@ -107,21 +101,20 @@ public class TransactionOutput extends ChildMessage {
      * amount should be created with something like {@link Coin#valueOf(int, int)}. Typically you would use
      * {@link Transaction#addOutput(Coin, ECKey)} instead of creating an output directly.
      */
-    public TransactionOutput(NetworkParameters params, @Nullable Transaction parent, Coin value, ECKey to) {
-        this(params, parent, value, ScriptBuilder.createP2PKOutputScript(to).getProgram());
+    public TransactionOutput(@Nullable Transaction parent, Coin value, ECKey to) {
+        this(parent, value, ScriptBuilder.createP2PKOutputScript(to).getProgram());
     }
 
-    public TransactionOutput(NetworkParameters params, @Nullable Transaction parent, Coin value, byte[] scriptBytes) {
-        super(params);
+    public TransactionOutput(@Nullable Transaction parent, Coin value, byte[] scriptBytes) {
+        super();
         // Negative values obviously make no sense, except for -1 which is used as a sentinel value when calculating
         // SIGHASH_SINGLE signatures, so unfortunately we have to allow that here.
-        checkArgument(value.signum() >= 0 || value.equals(Coin.NEGATIVE_SATOSHI), "Negative values not allowed");
-        checkArgument(!params.network().exceedsMaxMoney(value), "Values larger than MAX_MONEY not allowed");
+        checkArgument(value.signum() >= 0 || value.equals(Coin.NEGATIVE_SATOSHI), () ->
+                "negative values not allowed");
         this.value = value.value;
         this.scriptBytes = scriptBytes;
         setParent(parent);
         availableForSpending = true;
-        length = 8 + VarInt.sizeOf(scriptBytes.length) + scriptBytes.length;
     }
 
     public Script getScriptPubKey() throws ScriptException {
@@ -132,19 +125,27 @@ public class TransactionOutput extends ChildMessage {
     }
 
     @Override
-    protected void parse() throws ProtocolException {
-        value = readInt64();
-        int scriptLen = readVarInt().intValue();
-        length = cursor - offset + scriptLen;
-        scriptBytes = readBytes(scriptLen);
+    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        value = ByteUtils.readInt64(payload);
+        // Negative values obviously make no sense, except for -1 which is used as a sentinel value when calculating
+        // SIGHASH_SINGLE signatures, so unfortunately we have to allow that here.
+        check(value >= 0 || value == -1, () -> new ProtocolException("value out of range: " + value));
+        scriptBytes = Buffers.readLengthPrefixedBytes(payload);
+    }
+
+    @Override
+    public int getMessageSize() {
+        int size = 8; // value
+        size += VarInt.sizeOf(scriptBytes.length) + scriptBytes.length;
+        return size;
     }
 
     @Override
     protected void bitcoinSerializeToStream(OutputStream stream) throws IOException {
-        checkNotNull(scriptBytes);
-        ByteUtils.int64ToByteStreamLE(value, stream);
+        Objects.requireNonNull(scriptBytes);
+        ByteUtils.writeInt64LE(value, stream);
         // TODO: Move script serialization into the Script class, where it belongs.
-        stream.write(new VarInt(scriptBytes.length).encode());
+        stream.write(VarInt.of(scriptBytes.length).serialize());
         stream.write(scriptBytes);
     }
 
@@ -160,13 +161,16 @@ public class TransactionOutput extends ChildMessage {
      * Sets the value of this output.
      */
     public void setValue(Coin value) {
-        checkNotNull(value);
+        Objects.requireNonNull(value);
+        // Negative values obviously make no sense, except for -1 which is used as a sentinel value when calculating
+        // SIGHASH_SINGLE signatures, so unfortunately we have to allow that here.
+        checkArgument(value.signum() >= 0 || value.equals(Coin.NEGATIVE_SATOSHI), () -> "value out of range: " + value);
         unCache();
         this.value = value.value;
     }
 
     /**
-     * Gets the index of this output in the parent transaction, or throws if this output is free standing. Iterates
+     * Gets the index of this output in the parent transaction, or throws if this output is freestanding. Iterates
      * over the parents list to discover this.
      */
     public int getIndex() {
@@ -212,7 +216,7 @@ public class TransactionOutput extends ChildMessage {
         // so dust is a spendable txout less than
         // 98*dustRelayFee/1000 (in satoshis).
         // 294 satoshis at the default rate of 3000 sat/kB.
-        long size = this.unsafeBitcoinSerialize().length;
+        long size = this.bitcoinSerialize().length;
         final Script script = getScriptPubKey();
         if (ScriptPattern.isP2PKH(script) || ScriptPattern.isP2PK(script) || ScriptPattern.isP2SH(script))
             size += 32 + 4 + 1 + 107 + 4; // 148
@@ -325,28 +329,41 @@ public class TransactionOutput extends ChildMessage {
     }
 
     /**
-     * Returns a human readable debug string.
+     * Returns a human-readable debug string.
+     * @return debug string
      */
     @Override
     public String toString() {
+        return toString(null);
+    }
+
+    /**
+     * Returns a human-readable debug string.
+     * @param network if provided, addresses (of that network) will be printed for standard scripts
+     * @return debug string
+     */
+    public String toString(@Nullable Network network) {
+        StringBuilder buf = new StringBuilder("TxOut of ");
+        buf.append(Coin.valueOf(value).toFriendlyString());
         try {
             Script script = getScriptPubKey();
-            StringBuilder buf = new StringBuilder("TxOut of ");
-            buf.append(Coin.valueOf(value).toFriendlyString());
             if (ScriptPattern.isP2PKH(script) || ScriptPattern.isP2WPKH(script) || ScriptPattern.isP2TR(script)
-                    || ScriptPattern.isP2SH(script))
-                buf.append(" to ").append(script.getToAddress(params));
-            else if (ScriptPattern.isP2PK(script))
+                    || ScriptPattern.isP2SH(script)) {
+                buf.append(" to ").append(script.getScriptType().name());
+                if (network != null)
+                    buf.append(" ").append(script.getToAddress(network));
+            } else if (ScriptPattern.isP2PK(script)) {
                 buf.append(" to pubkey ").append(ByteUtils.formatHex(ScriptPattern.extractKeyFromP2PK(script)));
-            else if (ScriptPattern.isSentToMultisig(script))
+            } else if (ScriptPattern.isSentToMultisig(script)) {
                 buf.append(" to multisig");
-            else
+            } else {
                 buf.append(" (unknown type)");
+            }
             buf.append(" script:").append(script);
-            return buf.toString();
         } catch (ScriptException e) {
-            throw new RuntimeException(e);
+            buf.append(" [exception: ").append(e.getMessage()).append("]");
         }
+        return buf.toString();
     }
 
     /**
@@ -362,7 +379,7 @@ public class TransactionOutput extends ChildMessage {
      */
     @Nullable
     public Transaction getParentTransaction() {
-        return (Transaction)parent;
+        return parent;
     }
 
     /**
@@ -395,12 +412,30 @@ public class TransactionOutput extends ChildMessage {
      * Requires that this output is not detached.
      */
     public TransactionOutPoint getOutPointFor() {
-        return new TransactionOutPoint(params, getIndex(), getParentTransaction());
+        return new TransactionOutPoint(getIndex(), getParentTransaction());
     }
 
     /** Returns a copy of the output detached from its containing transaction, if need be. */
     public TransactionOutput duplicateDetached() {
-        return new TransactionOutput(params, null, Coin.valueOf(value), Arrays.copyOf(scriptBytes, scriptBytes.length));
+        return new TransactionOutput(null, Coin.valueOf(value), Arrays.copyOf(scriptBytes, scriptBytes.length));
+    }
+
+    protected final void setParent(@Nullable Transaction parent) {
+        if (this.parent != null && this.parent != parent && parent != null) {
+            // After old parent is unlinked it won't be able to receive notice if this child
+            // changes internally.  To be safe we invalidate the parent cache to ensure it rebuilds
+            // manually on serialization.
+            this.parent.unCache();
+        }
+        this.parent = parent;
+    }
+
+    /* (non-Javadoc)
+     * @see Message#unCache()
+     */
+    protected void unCache() {
+        if (parent != null)
+            parent.unCache();
     }
 
     @Override
@@ -408,7 +443,7 @@ public class TransactionOutput extends ChildMessage {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         TransactionOutput other = (TransactionOutput) o;
-        return value == other.value && (parent == null || (parent == other.parent && getIndex() == other.getIndex()))
+        return value == other.value && (parent == null || (parent.equals(other.parent) && getIndex() == other.getIndex()))
                 && Arrays.equals(scriptBytes, other.scriptBytes);
     }
 

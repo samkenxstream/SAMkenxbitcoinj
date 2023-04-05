@@ -17,20 +17,48 @@ package org.bitcoinj.crypto.internal;
 
 import org.bitcoinj.base.Sha256Hash;
 import org.bouncycastle.crypto.digests.RIPEMD160Digest;
+import org.bouncycastle.jcajce.provider.digest.SHA3;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 /**
  * Utilities for the crypto module (e.g. using Bouncy Castle)
  */
 public class CryptoUtils {
     /**
-     * Calculates RIPEMD160(SHA256(input)). This is used in Address calculations.
+     * Calculate RIPEMD160(SHA256(input)). This is used in Address calculations.
+     * @param input bytes to hash
+     * @return RIPEMD160(SHA256(input))
      */
     public static byte[] sha256hash160(byte[] input) {
         byte[] sha256 = Sha256Hash.hash(input);
+        return digestRipeMd160(sha256);
+    }
+
+    /**
+     * Calculate RIPEMD160(input).
+     * @param input bytes to hash
+     * @return RIPEMD160(input)
+     */
+    public static byte[] digestRipeMd160(byte[] input) {
         RIPEMD160Digest digest = new RIPEMD160Digest();
-        digest.update(sha256, 0, sha256.length);
-        byte[] out = new byte[20];
-        digest.doFinal(out, 0);
-        return out;
+        digest.update(input, 0, input.length);
+        byte[] ripmemdHash = new byte[20];
+        digest.doFinal(ripmemdHash, 0);
+        return ripmemdHash;
+    }
+
+    /**
+     * Calculate TOR Onion Checksum (used by PeerAddress)
+     */
+    public static byte[] onionChecksum(byte[] pubkey, byte version) {
+        if (pubkey.length != 32)
+            throw new IllegalArgumentException();
+        SHA3.Digest256 digest256 = new SHA3.Digest256();
+        digest256.update(".onion checksum".getBytes(StandardCharsets.US_ASCII));
+        digest256.update(pubkey);
+        digest256.update(version);
+        return Arrays.copyOf(digest256.digest(), 2);
     }
 }

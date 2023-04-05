@@ -19,9 +19,12 @@ package org.bitcoinj.core;
 
 import org.bitcoinj.base.Sha256Hash;
 import org.bitcoinj.base.VarInt;
+import org.bitcoinj.base.internal.Buffers;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Objects;
@@ -79,13 +82,12 @@ public class RejectMessage extends Message {
     private RejectCode code;
     private Sha256Hash messageHash;
 
-    public RejectMessage(NetworkParameters params, byte[] payload) throws ProtocolException {
-        super(params, payload, 0);
+    public RejectMessage(ByteBuffer payload) throws ProtocolException {
+        super(payload);
     }
 
     /** Constructs a reject message that fingers the object with the given hash as rejected for the given reason. */
-    public RejectMessage(NetworkParameters params, RejectCode code, Sha256Hash hash, String message, String reason) throws ProtocolException {
-        super(params);
+    public RejectMessage(RejectCode code, Sha256Hash hash, String message, String reason) {
         this.code = code;
         this.messageHash = hash;
         this.message = message;
@@ -93,26 +95,25 @@ public class RejectMessage extends Message {
     }
 
     @Override
-    protected void parse() throws ProtocolException {
-        message = readStr();
-        code = RejectCode.fromCode(readBytes(1)[0]);
-        reason = readStr();
+    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        message = Buffers.readLengthPrefixedString(payload);
+        code = RejectCode.fromCode(payload.get());
+        reason = Buffers.readLengthPrefixedString(payload);
         if (message.equals("block") || message.equals("tx"))
-            messageHash = readHash();
-        length = cursor - offset;
+            messageHash = Sha256Hash.read(payload);
     }
 
     @Override
     public void bitcoinSerializeToStream(OutputStream stream) throws IOException {
         byte[] messageBytes = message.getBytes(StandardCharsets.UTF_8);
-        stream.write(new VarInt(messageBytes.length).encode());
+        stream.write(VarInt.of(messageBytes.length).serialize());
         stream.write(messageBytes);
         stream.write(code.code);
         byte[] reasonBytes = reason.getBytes(StandardCharsets.UTF_8);
-        stream.write(new VarInt(reasonBytes.length).encode());
+        stream.write(VarInt.of(reasonBytes.length).serialize());
         stream.write(reasonBytes);
         if ("block".equals(message) || "tx".equals(message))
-            stream.write(messageHash.getReversedBytes());
+            stream.write(messageHash.serialize());
     }
 
     /**

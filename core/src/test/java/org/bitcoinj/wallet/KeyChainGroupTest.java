@@ -19,6 +19,7 @@ package org.bitcoinj.wallet;
 
 import org.bitcoinj.base.Address;
 import org.bitcoinj.base.internal.TimeUtils;
+import org.bitcoinj.crypto.AesKey;
 import org.bitcoinj.core.BloomFilter;
 import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.core.NetworkParameters;
@@ -33,16 +34,19 @@ import org.bitcoinj.utils.BriefLogFormatter;
 import org.bitcoinj.utils.Threading;
 import org.bitcoinj.wallet.KeyChain.KeyPurpose;
 import org.bitcoinj.wallet.listeners.KeyChainEventListener;
-import org.bouncycastle.crypto.params.KeyParameter;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.math.BigInteger;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -59,7 +63,8 @@ public class KeyChainGroupTest {
     private static final String XPUB = "xpub68KFnj3bqUx1s7mHejLDBPywCAKdJEu1b49uniEEn2WSbHmZ7xbLqFTjJbtx1LUcAt1DwhoqWHmo2s5WMJp6wi38CiF2hYD49qVViKVvAoi";
     private static final byte[] ENTROPY = Sha256Hash.hash("don't use a string seed like this in real life".getBytes());
     private static final KeyCrypterScrypt KEY_CRYPTER = new KeyCrypterScrypt(2);
-    private static final KeyParameter AES_KEY = KEY_CRYPTER.deriveKey("password");
+    private static final AesKey AES_KEY = KEY_CRYPTER.deriveKey("password");
+    private static final double LOW_FALSE_POSITIVE_RATE = 0.00001;
     private KeyChainGroup group;
     private DeterministicKey watchingAccountKey;
 
@@ -89,7 +94,7 @@ public class KeyChainGroupTest {
         Address address = kcg.currentAddress(KeyPurpose.RECEIVE_FUNDS);
         assertEquals(ScriptType.P2WPKH, address.getOutputScriptType());
         // check fallback (this will go away at some point)
-        address = kcg.freshAddress(KeyPurpose.RECEIVE_FUNDS, ScriptType.P2PKH, 0);
+        address = kcg.freshAddress(KeyPurpose.RECEIVE_FUNDS, ScriptType.P2PKH, null);
         assertEquals(ScriptType.P2PKH, address.getOutputScriptType());
     }
 
@@ -102,10 +107,10 @@ public class KeyChainGroupTest {
 
     private MarriedKeyChain createMarriedKeyChain() {
         byte[] entropy = Sha256Hash.hash("don't use a seed like this in real life".getBytes());
-        DeterministicSeed seed = new DeterministicSeed(entropy, "", MnemonicCode.BIP39_STANDARDISATION_TIME_SECS);
+        DeterministicSeed seed = DeterministicSeed.ofEntropy(entropy, "", Instant.ofEpochSecond(MnemonicCode.BIP39_STANDARDISATION_TIME_SECS));
         MarriedKeyChain chain = MarriedKeyChain.builder()
                 .seed(seed)
-                .followingKeys(watchingAccountKey)
+                .followingKey(watchingAccountKey)
                 .threshold(2).build();
         return chain;
     }
@@ -256,12 +261,12 @@ public class KeyChainGroupTest {
     }
 
     private void encryption(boolean withImported) {
-        TimeUtils.rollMockClock(0);
-        long now = TimeUtils.currentTimeSeconds();
+        Instant now = TimeUtils.currentTime().truncatedTo(ChronoUnit.SECONDS);
+        TimeUtils.setMockClock(now);
         ECKey a = group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
-        assertEquals(now, group.getEarliestKeyCreationTime());
-        TimeUtils.rollMockClock(-86400);
-        long yesterday = TimeUtils.currentTimeSeconds();
+        assertEquals(now, group.earliestKeyCreationTime());
+        Instant yesterday = now.minus(1, ChronoUnit.DAYS);
+        TimeUtils.setMockClock(yesterday);
         ECKey b = new ECKey();
 
         assertFalse(group.isEncrypted());
@@ -271,21 +276,21 @@ public class KeyChainGroupTest {
         } catch (IllegalStateException e) {
         }
         if (withImported) {
-            assertEquals(now, group.getEarliestKeyCreationTime());
+            assertEquals(now, group.earliestKeyCreationTime());
             group.importKeys(b);
-            assertEquals(yesterday, group.getEarliestKeyCreationTime());
+            assertEquals(yesterday, group.earliestKeyCreationTime());
         }
         group.encrypt(KEY_CRYPTER, AES_KEY);
         assertTrue(group.isEncrypted());
         assertTrue(group.checkPassword("password"));
         assertFalse(group.checkPassword("wrong password"));
         final ECKey ea = group.findKeyFromPubKey(a.getPubKey());
-        assertTrue(checkNotNull(ea).isEncrypted());
+        assertTrue(Objects.requireNonNull(ea).isEncrypted());
         if (withImported) {
-            assertTrue(checkNotNull(group.findKeyFromPubKey(b.getPubKey())).isEncrypted());
-            assertEquals(yesterday, group.getEarliestKeyCreationTime());
+            assertTrue(Objects.requireNonNull(group.findKeyFromPubKey(b.getPubKey())).isEncrypted());
+            assertEquals(yesterday, group.earliestKeyCreationTime());
         } else {
-            assertEquals(now, group.getEarliestKeyCreationTime());
+            assertEquals(now, group.earliestKeyCreationTime());
         }
         try {
             ea.sign(Sha256Hash.ZERO_HASH);
@@ -317,12 +322,12 @@ public class KeyChainGroupTest {
 
         group.decrypt(AES_KEY);
         assertFalse(group.isEncrypted());
-        assertFalse(checkNotNull(group.findKeyFromPubKey(a.getPubKey())).isEncrypted());
+        assertFalse(Objects.requireNonNull(group.findKeyFromPubKey(a.getPubKey())).isEncrypted());
         if (withImported) {
-            assertFalse(checkNotNull(group.findKeyFromPubKey(b.getPubKey())).isEncrypted());
-            assertEquals(yesterday, group.getEarliestKeyCreationTime());
+            assertFalse(Objects.requireNonNull(group.findKeyFromPubKey(b.getPubKey())).isEncrypted());
+            assertEquals(yesterday, group.earliestKeyCreationTime());
         } else {
-            assertEquals(now, group.getEarliestKeyCreationTime());
+            assertEquals(now, group.earliestKeyCreationTime());
         }
     }
 
@@ -333,14 +338,14 @@ public class KeyChainGroupTest {
         assertTrue(group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS).isEncrypted());
         final ECKey key = group.currentKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         group.decrypt(AES_KEY);
-        assertFalse(checkNotNull(group.findKeyFromPubKey(key.getPubKey())).isEncrypted());
+        assertFalse(Objects.requireNonNull(group.findKeyFromPubKey(key.getPubKey())).isEncrypted());
     }
 
     @Test
     public void bloom() {
         ECKey key1 = group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         ECKey key2 = new ECKey();
-        BloomFilter filter = group.getBloomFilter(group.getBloomFilterElementCount(), 0.001, (long)(Math.random() * Long.MAX_VALUE));
+        BloomFilter filter = group.getBloomFilter(group.getBloomFilterElementCount(), LOW_FALSE_POSITIVE_RATE, new Random().nextInt());
         assertTrue(filter.contains(key1.getPubKeyHash()));
         assertTrue(filter.contains(key1.getPubKey()));
         assertFalse(filter.contains(key2.getPubKey()));
@@ -352,7 +357,7 @@ public class KeyChainGroupTest {
         // We ran ahead of the lookahead buffer.
         assertFalse(filter.contains(group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS).getPubKey()));
         group.importKeys(key2);
-        filter = group.getBloomFilter(group.getBloomFilterElementCount(), 0.001, (long) (Math.random() * Long.MAX_VALUE));
+        filter = group.getBloomFilter(group.getBloomFilterElementCount(), LOW_FALSE_POSITIVE_RATE, new Random().nextInt());
         assertTrue(filter.contains(key1.getPubKeyHash()));
         assertTrue(filter.contains(key1.getPubKey()));
         assertTrue(filter.contains(key2.getPubKey()));
@@ -383,7 +388,7 @@ public class KeyChainGroupTest {
         assertEquals(expected, group.getBloomFilterElementCount());
         Address address1 = group.freshAddress(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         assertEquals(expected, group.getBloomFilterElementCount());
-        BloomFilter filter = group.getBloomFilter(expected + 2, 0.001, (long)(Math.random() * Long.MAX_VALUE));
+        BloomFilter filter = group.getBloomFilter(expected + 2, LOW_FALSE_POSITIVE_RATE, new Random().nextInt());
         assertTrue(filter.contains(address1.getHash()));
 
         Address address2 = group.freshAddress(KeyChain.KeyPurpose.CHANGE);
@@ -395,24 +400,28 @@ public class KeyChainGroupTest {
             assertTrue("key " + i, filter.contains(address.getHash()));
         }
         // We ran ahead of the lookahead buffer.
-        assertFalse(filter.contains(group.freshAddress(KeyChain.KeyPurpose.RECEIVE_FUNDS).getHash()));
+        // We try two fresh addresses because of expected false positives. Note that the test could still fail.
+        Address fresh1 = group.freshAddress(KeyPurpose.RECEIVE_FUNDS);
+        Address fresh2 = group.freshAddress(KeyPurpose.RECEIVE_FUNDS);
+        assertFalse(filter.contains(fresh1.getHash()) && filter.contains(fresh2.getHash()));
     }
 
     @Test
     public void earliestKeyTime() {
-        long now = TimeUtils.currentTimeSeconds();   // mock
-        long yesterday = now - 86400;
-        assertEquals(now, group.getEarliestKeyCreationTime());
-        TimeUtils.rollMockClock(10000);
+        Instant now = TimeUtils.currentTime().truncatedTo(ChronoUnit.SECONDS);
+        TimeUtils.setMockClock(now);
+        assertEquals(now, group.earliestKeyCreationTime());
+        TimeUtils.rollMockClock(Duration.ofSeconds(10_000));
         group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
-        TimeUtils.rollMockClock(10000);
+        TimeUtils.rollMockClock(Duration.ofSeconds(10_000));
         group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         // Check that all keys are assumed to be created at the same instant the seed is.
-        assertEquals(now, group.getEarliestKeyCreationTime());
+        assertEquals(now, group.earliestKeyCreationTime());
         ECKey key = new ECKey();
-        key.setCreationTimeSeconds(yesterday);
+        Instant yesterday = now.minus(1, ChronoUnit.DAYS);
+        key.setCreationTime(yesterday);
         group.importKeys(key);
-        assertEquals(yesterday, group.getEarliestKeyCreationTime());
+        assertEquals(yesterday, group.earliestKeyCreationTime());
     }
 
     @Test
@@ -507,7 +516,7 @@ public class KeyChainGroupTest {
     @Test
     public void constructFromSeed() {
         ECKey key1 = group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
-        final DeterministicSeed seed = checkNotNull(group.getActiveKeyChain().getSeed());
+        final DeterministicSeed seed = Objects.requireNonNull(group.getActiveKeyChain().getSeed());
         KeyChainGroup group2 = KeyChainGroup.builder(MAINNET).lookaheadSize(5)
                 .addChain(DeterministicKeyChain.builder().seed(seed).outputScriptType(ScriptType.P2PKH).build())
                 .build();
@@ -517,7 +526,7 @@ public class KeyChainGroupTest {
 
     @Test
     public void addAndActivateHDChain_freshCurrentAddress() {
-        DeterministicSeed seed = new DeterministicSeed(ENTROPY, "", 0);
+        DeterministicSeed seed = DeterministicSeed.ofEntropy(ENTROPY, "");
         DeterministicKeyChain chain1 = DeterministicKeyChain.builder().seed(seed)
                 .accountPath(DeterministicKeyChain.ACCOUNT_ZERO_PATH).outputScriptType(ScriptType.P2PKH).build();
         group = KeyChainGroup.builder(MAINNET).addChain(chain1).build();
@@ -541,8 +550,8 @@ public class KeyChainGroupTest {
         // Check that if we try to use HD features in a KCG that only has random keys, we get an exception.
         group = KeyChainGroup.builder(MAINNET).build();
         group.importKeys(new ECKey(), new ECKey());
-        assertTrue(group.isDeterministicUpgradeRequired(ScriptType.P2PKH, 0));
-        assertTrue(group.isDeterministicUpgradeRequired(ScriptType.P2WPKH, 0));
+        assertTrue(group.isDeterministicUpgradeRequired(ScriptType.P2PKH, null));
+        assertTrue(group.isDeterministicUpgradeRequired(ScriptType.P2WPKH, null));
         group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);   // throws
     }
 
@@ -551,19 +560,19 @@ public class KeyChainGroupTest {
         group = KeyChainGroup.builder(MAINNET).fromRandom(ScriptType.P2PKH).lookaheadSize(LOOKAHEAD_SIZE).build();
 
         List<Protos.Key> protobufs = group.serializeToProtobuf();
-        group.upgradeToDeterministic(ScriptType.P2PKH, KeyChainGroupStructure.BIP32, 0, null);
+        group.upgradeToDeterministic(ScriptType.P2PKH, KeyChainGroupStructure.BIP32, null, null);
         assertFalse(group.isEncrypted());
-        assertFalse(group.isDeterministicUpgradeRequired(ScriptType.P2PKH, 0));
-        assertTrue(group.isDeterministicUpgradeRequired(ScriptType.P2WPKH, 0));
+        assertFalse(group.isDeterministicUpgradeRequired(ScriptType.P2PKH, null));
+        assertTrue(group.isDeterministicUpgradeRequired(ScriptType.P2WPKH, null));
         DeterministicKey dkey1 = group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         DeterministicSeed seed1 = group.getActiveKeyChain().getSeed();
         assertNotNull(seed1);
 
         group = KeyChainGroup.fromProtobufUnencrypted(MAINNET, protobufs);
-        group.upgradeToDeterministic(ScriptType.P2PKH, KeyChainGroupStructure.BIP32, 0, null);  // Should give same result as last time.
+        group.upgradeToDeterministic(ScriptType.P2PKH, KeyChainGroupStructure.BIP32, null, null);  // Should give same result as last time.
         assertFalse(group.isEncrypted());
-        assertFalse(group.isDeterministicUpgradeRequired(ScriptType.P2PKH, 0));
-        assertTrue(group.isDeterministicUpgradeRequired(ScriptType.P2WPKH, 0));
+        assertFalse(group.isDeterministicUpgradeRequired(ScriptType.P2PKH, null));
+        assertTrue(group.isDeterministicUpgradeRequired(ScriptType.P2WPKH, null));
         DeterministicKey dkey2 = group.freshKey(KeyChain.KeyPurpose.RECEIVE_FUNDS);
         DeterministicSeed seed2 = group.getActiveKeyChain().getSeed();
         assertEquals(seed1, seed2);
@@ -575,12 +584,12 @@ public class KeyChainGroupTest {
         group = KeyChainGroup.builder(MAINNET).fromRandom(ScriptType.P2PKH).build();
         group.encrypt(KEY_CRYPTER, AES_KEY);
         assertTrue(group.isEncrypted());
-        assertFalse(group.isDeterministicUpgradeRequired(ScriptType.P2PKH, 0));
-        assertTrue(group.isDeterministicUpgradeRequired(ScriptType.P2WPKH, 0));
+        assertFalse(group.isDeterministicUpgradeRequired(ScriptType.P2PKH, null));
+        assertTrue(group.isDeterministicUpgradeRequired(ScriptType.P2WPKH, null));
         final DeterministicSeed deterministicSeed = group.getActiveKeyChain().getSeed();
         assertNotNull(deterministicSeed);
         assertTrue(deterministicSeed.isEncrypted());
-        byte[] entropy = checkNotNull(group.getActiveKeyChain().toDecrypted(AES_KEY).getSeed()).getEntropyBytes();
+        byte[] entropy = Objects.requireNonNull(group.getActiveKeyChain().toDecrypted(AES_KEY).getSeed()).getEntropyBytes();
     }
 
     @Test
@@ -634,7 +643,7 @@ public class KeyChainGroupTest {
     @Test
     public void segwitKeyChainGroup() throws Exception {
         group = KeyChainGroup.builder(MAINNET).lookaheadSize(LOOKAHEAD_SIZE)
-                .addChain(DeterministicKeyChain.builder().entropy(ENTROPY, 0).outputScriptType(ScriptType.P2WPKH)
+                .addChain(DeterministicKeyChain.builder().entropy(ENTROPY, TimeUtils.currentTime()).outputScriptType(ScriptType.P2WPKH)
                         .accountPath(DeterministicKeyChain.ACCOUNT_ONE_PATH).build())
                 .build();
         assertEquals(ScriptType.P2WPKH, group.getActiveKeyChain().getOutputScriptType());

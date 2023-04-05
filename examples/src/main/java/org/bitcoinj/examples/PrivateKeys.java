@@ -70,11 +70,11 @@ public class PrivateKeys {
             Address destination = wallet.parseAddress(args[1]);
 
             // Find the transactions that involve those coins.
-            final MemoryBlockStore blockStore = new MemoryBlockStore(params);
+            final MemoryBlockStore blockStore = new MemoryBlockStore(params.getGenesisBlock());
             BlockChain chain = new BlockChain(params, wallet, blockStore);
 
             final PeerGroup peerGroup = new PeerGroup(network, chain);
-            peerGroup.addAddress(new PeerAddress(params, InetAddress.getLocalHost()));
+            peerGroup.addAddress(PeerAddress.localhost(params));
             peerGroup.startAsync();
             peerGroup.downloadBlockChain();
 

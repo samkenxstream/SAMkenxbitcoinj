@@ -22,13 +22,12 @@ import java.math.BigInteger;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.EnumSet;
-
-import static com.google.common.base.Preconditions.checkNotNull;
+import java.util.Objects;
 
 import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.Network;
 import org.bitcoinj.base.ScriptType;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.base.Coin;
 import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.core.NetworkParameters;
@@ -86,9 +85,9 @@ public class GenerateLowSTests {
         // Generate a fictional output transaction we take values from, and
         // an input transaction for the test case
 
-        final Transaction outputTransaction = new Transaction(params);
-        final Transaction inputTransaction = new Transaction(params);
-        final TransactionOutput output = new TransactionOutput(params, inputTransaction, Coin.ZERO, key.toAddress(ScriptType.P2PKH, network));
+        final Transaction outputTransaction = new Transaction();
+        final Transaction inputTransaction = new Transaction();
+        final TransactionOutput output = new TransactionOutput(inputTransaction, Coin.ZERO, key.toAddress(ScriptType.P2PKH, network));
 
         inputTransaction.addOutput(output);
         outputTransaction.addInput(output);
@@ -114,7 +113,7 @@ public class GenerateLowSTests {
             + inputTransaction.getTxId() + "\", "
             + output.getIndex() + ", \""
             + scriptToString(output.getScriptPubKey()) + "\"]],\n"
-            + "\"" + proposedTransaction.partialTx.toHexString() + "\", \""
+            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.bitcoinSerialize()) + "\", \""
             + Script.VerifyFlag.P2SH.name() + "," + Script.VerifyFlag.LOW_S.name() + "\"],");
 
         final BigInteger highS = HIGH_S_DIFFERENCE.subtract(signature.s);
@@ -129,7 +128,7 @@ public class GenerateLowSTests {
             + inputTransaction.getTxId() + "\", "
             + output.getIndex() + ", \""
             + scriptToString(output.getScriptPubKey()) + "\"]],\n"
-            + "\"" + proposedTransaction.partialTx.toHexString() + "\", \""
+            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.bitcoinSerialize()) + "\", \""
             + Script.VerifyFlag.P2SH.name() + "\"],");
 
         // Lastly a conventional high-S transaction with the LOW_S flag, for the tx_invalid.json set
@@ -138,7 +137,7 @@ public class GenerateLowSTests {
             + inputTransaction.getTxId() + "\", "
             + output.getIndex() + ", \""
             + scriptToString(output.getScriptPubKey()) + "\"]],\n"
-            + "\"" + proposedTransaction.partialTx.toHexString() + "\", \""
+            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.bitcoinSerialize()) + "\", \""
             + Script.VerifyFlag.P2SH.name() + "," + Script.VerifyFlag.LOW_S.name() + "\"],");
     }
 
@@ -148,7 +147,8 @@ public class GenerateLowSTests {
             TransactionInput txIn = outputTransaction.getInput(i);
             Script scriptPubKey = txIn.getConnectedOutput().getScriptPubKey();
             RedeemData redeemData = txIn.getConnectedRedeemData(bag);
-            checkNotNull(redeemData, "Transaction exists in wallet that we cannot redeem: %s", txIn.getOutpoint().getHash());
+            Objects.requireNonNull(redeemData, () ->
+                    "Transaction exists in wallet that we cannot redeem: " + txIn.getOutpoint().hash());
             txIn.setScriptSig(scriptPubKey.createEmptyInputScript(redeemData.keys.get(0), redeemData.redeemScript));
         }
     }

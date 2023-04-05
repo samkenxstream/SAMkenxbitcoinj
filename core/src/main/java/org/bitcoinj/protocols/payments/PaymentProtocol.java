@@ -36,6 +36,7 @@ import org.bitcoinj.params.UnitTestParams;
 import org.bitcoinj.script.ScriptBuilder;
 
 import javax.annotation.Nullable;
+import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
@@ -131,7 +132,7 @@ public class PaymentProtocol {
             paymentDetails.setPaymentUrl(paymentUrl);
         if (merchantData != null)
             paymentDetails.setMerchantData(ByteString.copyFrom(merchantData));
-        paymentDetails.setTime(TimeUtils.currentTimeSeconds());
+        paymentDetails.setTime(TimeUtils.currentTime().getEpochSecond());
 
         final Protos.PaymentRequest.Builder paymentRequest = Protos.PaymentRequest.newBuilder();
         paymentRequest.setSerializedPaymentDetails(paymentDetails.build().toByteString());
@@ -344,8 +345,7 @@ public class PaymentProtocol {
             @Nullable List<Protos.Output> refundOutputs, @Nullable String memo, @Nullable byte[] merchantData) {
         Protos.Payment.Builder builder = Protos.Payment.newBuilder();
         for (Transaction transaction : transactions) {
-            transaction.verify();
-            builder.addTransactions(ByteString.copyFrom(transaction.unsafeBitcoinSerialize()));
+            builder.addTransactions(ByteString.copyFrom(transaction.bitcoinSerialize()));
         }
         if (refundOutputs != null) {
             for (Protos.Output output : refundOutputs)
@@ -369,7 +369,7 @@ public class PaymentProtocol {
             Protos.Payment paymentMessage) {
         final List<Transaction> transactions = new ArrayList<>(paymentMessage.getTransactionsCount());
         for (final ByteString transaction : paymentMessage.getTransactionsList())
-            transactions.add(params.getDefaultSerializer().makeTransaction(transaction.toByteArray()));
+            transactions.add(params.getDefaultSerializer().makeTransaction(ByteBuffer.wrap(transaction.toByteArray())));
         return transactions;
     }
 

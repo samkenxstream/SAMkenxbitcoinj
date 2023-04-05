@@ -45,7 +45,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>A FullPrunedBlockChain works in conjunction with a {@link FullPrunedBlockStore} to verify all the rules of the
@@ -188,7 +188,7 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
         String address = "";
         try {
             if (script != null) {
-                address = script.getToAddress(params, true).toString();
+                address = script.getToAddress(params.network(), true).toString();
             }
         } catch (Exception e) {
         }
@@ -243,8 +243,8 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
                     // outputs.
                     for (int index = 0; index < tx.getInputs().size(); index++) {
                         TransactionInput in = tx.getInputs().get(index);
-                        UTXO prevOut = blockStore.getTransactionOutput(in.getOutpoint().getHash(),
-                                in.getOutpoint().getIndex());
+                        UTXO prevOut = blockStore.getTransactionOutput(in.getOutpoint().hash(),
+                                in.getOutpoint().index());
                         if (prevOut == null)
                             throw new VerificationException("Attempted to spend a non-existent or already spent output!");
                         // Coinbases can't be spent until they mature, to avoid re-orgs destroying entire transaction
@@ -374,8 +374,8 @@ public class FullPrunedBlockChain extends AbstractBlockChain {
                     if (!isCoinBase) {
                         for (int index = 0; index < tx.getInputs().size(); index++) {
                             final TransactionInput in = tx.getInputs().get(index);
-                            final UTXO prevOut = blockStore.getTransactionOutput(in.getOutpoint().getHash(),
-                                    in.getOutpoint().getIndex());
+                            final UTXO prevOut = blockStore.getTransactionOutput(in.getOutpoint().hash(),
+                                    in.getOutpoint().index());
                             if (prevOut == null)
                                 throw new VerificationException("Attempted spend of a non-existent or already spent output!");
                             if (prevOut.isCoinbase() && newBlock.getHeight() - prevOut.getHeight() < params.getSpendableCoinbaseDepth())

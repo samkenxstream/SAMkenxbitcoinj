@@ -18,13 +18,13 @@
 package org.bitcoinj.params;
 
 import org.bitcoinj.base.BitcoinNetwork;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.core.Block;
 import org.bitcoinj.base.Sha256Hash;
 
 import java.time.Instant;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * Network parameters for the regression test mode of bitcoind in which all blocks are trivially solvable.
@@ -46,7 +46,7 @@ public class RegTestParams extends BitcoinNetworkParams {
         subsidyDecreaseBlockCount = 150;
 
         port = 18444;
-        packetMagic = 0xfabfb5daL;
+        packetMagic = 0xfabfb5da;
         dumpedPrivateKeyHeader = 239;
         addressHeader = 111;
         p2shHeader = 196;
@@ -82,11 +82,12 @@ public class RegTestParams extends BitcoinNetworkParams {
     public Block getGenesisBlock() {
         synchronized (GENESIS_HASH) {
             if (genesisBlock == null) {
-                genesisBlock = Block.createGenesis(this);
+                genesisBlock = Block.createGenesis();
                 genesisBlock.setDifficultyTarget(Block.EASIEST_DIFFICULTY_TARGET);
                 genesisBlock.setTime(Instant.ofEpochSecond(GENESIS_TIME));
                 genesisBlock.setNonce(GENESIS_NONCE);
-                checkState(genesisBlock.getHash().equals(GENESIS_HASH), "Invalid genesis hash");
+                checkState(genesisBlock.getHash().equals(GENESIS_HASH), () ->
+                        "invalid genesis hash");
             }
         }
         return genesisBlock;

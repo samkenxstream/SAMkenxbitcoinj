@@ -18,8 +18,12 @@
 
 package org.bitcoinj.base.internal;
 
+import org.junit.Before;
 import org.junit.Test;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.util.Date;
 
 import static org.junit.Assert.assertEquals;
@@ -27,17 +31,57 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class TimeUtilsTest {
-
-    @Test
-    public void dateTimeFormat() {
-        assertEquals("2014-11-16T10:54:33Z", TimeUtils.dateTimeFormat(1416135273781L));
-        assertEquals("2014-11-16T10:54:33Z", TimeUtils.dateTimeFormat(new Date(1416135273781L)));
+    @Before
+    public void setUp() {
+        TimeUtils.clearMockClock();
     }
 
     @Test
-    public void testRollMockClock() {
-        TimeUtils.setMockClock(25200);
-        assertEquals(new Date("Thu Jan 01 07:00:08 GMT 1970"), TimeUtils.rollMockClock(8));
-        TimeUtils.resetMocking();
+    public void setAndRollMockClock() {
+        TimeUtils.setMockClock(Instant.ofEpochSecond(25200));
+        assertEquals(Instant.from(DateTimeFormatter.ISO_INSTANT.parse("1970-01-01T07:00:00Z")), TimeUtils.currentTime());
+        TimeUtils.rollMockClock(Duration.ofSeconds(8));
+        assertEquals(Instant.from(DateTimeFormatter.ISO_INSTANT.parse("1970-01-01T07:00:08Z")), TimeUtils.currentTime());
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void rollMockClock_uninitialized() {
+        TimeUtils.rollMockClock(Duration.ofMinutes(1));
+    }
+
+    @Test
+    public void dateTimeFormat() {
+        long ms = 1416135273781L;
+        assertEquals("2014-11-16T10:54:33.781Z", TimeUtils.dateTimeFormat(Instant.ofEpochMilli(ms)));
+    }
+
+    @Test
+    public void earlier() {
+        Instant t1 = Instant.now(); // earlier
+        Instant t2 = t1.plusSeconds(1); // later
+        assertEquals(t1, TimeUtils.earlier(t1, t2));
+        assertEquals(t1, TimeUtils.earlier(t2, t1));
+        assertEquals(t1, TimeUtils.earlier(t1, t1));
+        assertEquals(t2, TimeUtils.earlier(t2, t2));
+    }
+
+    @Test
+    public void later() {
+        Instant t1 = Instant.now(); // earlier
+        Instant t2 = t1.plusSeconds(1); // later
+        assertEquals(t2, TimeUtils.later(t1, t2));
+        assertEquals(t2, TimeUtils.later(t2, t1));
+        assertEquals(t1, TimeUtils.later(t1, t1));
+        assertEquals(t2, TimeUtils.later(t2, t2));
+    }
+
+    @Test
+    public void longest() {
+        Duration d1 = Duration.ofMinutes(1); // shorter
+        Duration d2 = Duration.ofMinutes(1); // longer
+        assertEquals(d2, TimeUtils.longest(d1, d2));
+        assertEquals(d2, TimeUtils.longest(d2, d1));
+        assertEquals(d1, TimeUtils.longest(d1, d1));
+        assertEquals(d2, TimeUtils.longest(d2, d2));
     }
 }

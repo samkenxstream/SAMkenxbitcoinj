@@ -22,6 +22,7 @@ import org.bitcoinj.base.Address;
 import org.bitcoinj.base.Coin;
 import org.bitcoinj.base.ScriptType;
 import org.bitcoinj.base.Sha256Hash;
+import org.bitcoinj.base.internal.Stopwatch;
 import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.core.listeners.DownloadProgressTracker;
 import org.bitcoinj.core.listeners.PeerConnectedEventListener;
@@ -47,8 +48,10 @@ import java.net.BindException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -244,7 +247,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
 
         Coin value = COIN;
         Transaction t1 = FakeTxBuilder.createFakeTx(UNITTEST, value, address);
-        InventoryMessage inv = new InventoryMessage(UNITTEST);
+        InventoryMessage inv = new InventoryMessage();
         inv.addTransaction(t1);
 
         // Note: we start with p2 here to verify that transactions are downloaded from whichever peer announces first
@@ -258,7 +261,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         // Asks for dependency.
         GetDataMessage getdata = (GetDataMessage) outbound(p2);
         assertNotNull(getdata);
-        inbound(p2, new NotFoundMessage(UNITTEST, getdata.getItems()));
+        inbound(p2, new NotFoundMessage(getdata.getItems()));
         pingAndWait(p2);
         assertEquals(value, wallet.getBalance(Wallet.BalanceType.ESTIMATED));
     }
@@ -284,7 +287,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
 
         Coin value = COIN;
         Transaction t1 = FakeTxBuilder.createFakeTx(UNITTEST, value, address2);
-        InventoryMessage inv = new InventoryMessage(UNITTEST);
+        InventoryMessage inv = new InventoryMessage();
         inv.addTransaction(t1);
 
         inbound(p1, inv);
@@ -293,7 +296,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         // Asks for dependency.
         GetDataMessage getdata = (GetDataMessage) outbound(p1);
         assertNotNull(getdata);
-        inbound(p1, new NotFoundMessage(UNITTEST, getdata.getItems()));
+        inbound(p1, new NotFoundMessage(getdata.getItems()));
         pingAndWait(p1);
         assertEquals(value, wallet2.getBalance(Wallet.BalanceType.ESTIMATED));
     }
@@ -316,7 +319,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         Block b3 = FakeTxBuilder.makeSolvedTestBlock(b2);
 
         // Peer 1 and 2 receives an inv advertising a newly solved block.
-        InventoryMessage inv = new InventoryMessage(UNITTEST);
+        InventoryMessage inv = new InventoryMessage();
         inv.addBlock(b3);
         // Only peer 1 tries to download it.
         inbound(p1, inv);
@@ -355,7 +358,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         GetBlocksMessage getblocks = (GetBlocksMessage) outbound(p1);
         assertEquals(Sha256Hash.ZERO_HASH, getblocks.getStopHash());
         // We give back an inv with some blocks in it.
-        InventoryMessage inv = new InventoryMessage(UNITTEST);
+        InventoryMessage inv = new InventoryMessage();
         inv.addBlock(b1);
         inv.addBlock(b2);
         inv.addBlock(b3);
@@ -385,11 +388,11 @@ public class PeerGroupTest extends TestWithPeerGroup {
         InboundMessageQueuer p3 = connectPeer(3);
 
         Transaction tx = FakeTxBuilder.createFakeTx(UNITTEST, valueOf(20, 0), address);
-        InventoryMessage inv = new InventoryMessage(UNITTEST);
+        InventoryMessage inv = new InventoryMessage();
         inv.addTransaction(tx);
 
         assertEquals(0, tx.getConfidence().numBroadcastPeers());
-        assertNull(tx.getConfidence().getLastBroadcastedAt());
+        assertFalse(tx.getConfidence().lastBroadcastTime().isPresent());
 
         // Peer 2 advertises the tx but does not receive it yet.
         inbound(p2, inv);
@@ -413,7 +416,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         assertEquals(2, tx.getConfidence().numBroadcastPeers());
         assertTrue(tx.getConfidence().wasBroadcastBy(peerOf(p1).getAddress()));
         assertTrue(tx.getConfidence().wasBroadcastBy(peerOf(p2).getAddress()));
-        assertNotNull(tx.getConfidence().getLastBroadcastedAt());
+        assertTrue(tx.getConfidence().lastBroadcastTime().isPresent());
 
         tx.getConfidence().addEventListener((confidence, reason) -> confEvent[0] = confidence);
         // A straggler reports in.
@@ -430,23 +433,23 @@ public class PeerGroupTest extends TestWithPeerGroup {
         // Check the fast catchup time was initialized to something around the current runtime minus a week.
         // The wallet was already added to the peer in setup.
         final int WEEK = 86400 * 7;
-        final long now = TimeUtils.currentTimeSeconds();
+        final Instant now = TimeUtils.currentTime().truncatedTo(ChronoUnit.SECONDS);
         peerGroup.start();
-        assertTrue(peerGroup.getFastCatchupTimeSecs() > now - WEEK - 10000);
+        assertTrue(peerGroup.fastCatchupTime().isAfter(now.minusSeconds(WEEK).minusSeconds(10000)));
         Wallet w2 = Wallet.createDeterministic(UNITTEST, ScriptType.P2PKH);
         ECKey key1 = new ECKey();
-        key1.setCreationTimeSeconds(now - 86400);  // One day ago.
+        key1.setCreationTime(now.minus(1, ChronoUnit.DAYS));  // One day ago.
         w2.importKey(key1);
         peerGroup.addWallet(w2);
         peerGroup.waitForJobQueue();
-        assertEquals(peerGroup.getFastCatchupTimeSecs(), now - 86400 - WEEK);
+        assertEquals(peerGroup.fastCatchupTime(), now.minusSeconds(86400).minusSeconds(WEEK));
         // Adding a key to the wallet should update the fast catchup time, but asynchronously and in the background
         // due to the need to avoid complicated lock inversions.
         ECKey key2 = new ECKey();
-        key2.setCreationTimeSeconds(now - 100000);
+        key2.setCreationTime(now.minusSeconds(100000));
         w2.importKey(key2);
         peerGroup.waitForJobQueue();
-        assertEquals(peerGroup.getFastCatchupTimeSecs(), now - WEEK - 100000);
+        assertEquals(peerGroup.fastCatchupTime(),now.minusSeconds(WEEK).minusSeconds(100000));
     }
 
     @Test
@@ -455,10 +458,10 @@ public class PeerGroupTest extends TestWithPeerGroup {
         peerGroup.setPingIntervalMsec(0);
         VersionMessage versionMessage = new VersionMessage(UNITTEST, 2);
         versionMessage.clientVersion = NetworkParameters.ProtocolVersion.BLOOM_FILTER.getBitcoinProtocolVersion();
-        versionMessage.localServices = VersionMessage.NODE_NETWORK;
+        versionMessage.localServices = Services.of(Services.NODE_NETWORK);
         connectPeer(1, versionMessage);
         peerGroup.waitForPeers(1).get();
-        assertFalse(peerGroup.getConnectedPeers().get(0).getLastPingTime() < Long.MAX_VALUE);
+        assertFalse(peerGroup.getConnectedPeers().get(0).lastPingInterval().isPresent());
     }
 
     @Test
@@ -467,16 +470,16 @@ public class PeerGroupTest extends TestWithPeerGroup {
         peerGroup.setPingIntervalMsec(100);
         VersionMessage versionMessage = new VersionMessage(UNITTEST, 2);
         versionMessage.clientVersion = NetworkParameters.ProtocolVersion.BLOOM_FILTER.getBitcoinProtocolVersion();
-        versionMessage.localServices = VersionMessage.NODE_NETWORK;
+        versionMessage.localServices = Services.of(Services.NODE_NETWORK);
         InboundMessageQueuer p1 = connectPeer(1, versionMessage);
         Ping ping = (Ping) waitForOutbound(p1);
         inbound(p1, new Pong(ping.getNonce()));
         pingAndWait(p1);
-        assertTrue(peerGroup.getConnectedPeers().get(0).getLastPingTime() < Long.MAX_VALUE);
+        assertTrue(peerGroup.getConnectedPeers().get(0).lastPingInterval().isPresent());
         // The call to outbound should block until a ping arrives.
         ping = (Ping) waitForOutbound(p1);
         inbound(p1, new Pong(ping.getNonce()));
-        assertTrue(peerGroup.getConnectedPeers().get(0).getLastPingTime() < Long.MAX_VALUE);
+        assertTrue(peerGroup.getConnectedPeers().get(0).lastPingInterval().isPresent());
     }
 
     @Test
@@ -484,10 +487,10 @@ public class PeerGroupTest extends TestWithPeerGroup {
         peerGroup.start();
         VersionMessage v1 = new VersionMessage(UNITTEST, 2);
         v1.clientVersion = NetworkParameters.ProtocolVersion.WITNESS_VERSION.getBitcoinProtocolVersion();
-        v1.localServices = VersionMessage.NODE_NETWORK | VersionMessage.NODE_BLOOM | VersionMessage.NODE_WITNESS;
+        v1.localServices = Services.of(Services.NODE_NETWORK | Services.NODE_BLOOM | Services.NODE_WITNESS);
         VersionMessage v2 = new VersionMessage(UNITTEST, 4);
         v2.clientVersion = NetworkParameters.ProtocolVersion.WITNESS_VERSION.getBitcoinProtocolVersion();
-        v2.localServices = VersionMessage.NODE_NETWORK | VersionMessage.NODE_BLOOM | VersionMessage.NODE_WITNESS;
+        v2.localServices = Services.of(Services.NODE_NETWORK | Services.NODE_BLOOM | Services.NODE_WITNESS);
         assertNull(peerGroup.getDownloadPeer());
 
         Peer p1 = connectPeer(0, v1).peer;
@@ -517,33 +520,34 @@ public class PeerGroupTest extends TestWithPeerGroup {
         // reenable this test
         /*VersionMessage versionMessage4 = new VersionMessage(UNITTEST, 3);
         versionMessage4.clientVersion = 100000;
-        versionMessage4.localServices = VersionMessage.NODE_NETWORK;
+        versionMessage4.localServices = Services.NODE_NETWORK;
         InboundMessageQueuer d = connectPeer(5, versionMessage4);
         assertEquals(d.peer, peerGroup.getDownloadPeer());*/
     }
 
     @Test
     public void peerTimeoutTest() throws Exception {
-        final int timeout = 100;
+        final Duration timeout = Duration.ofMillis(100);
         peerGroup.start();
-        peerGroup.setConnectTimeoutMillis(timeout);
+        peerGroup.setConnectTimeout(timeout);
 
         final CompletableFuture<Void> peerConnectedFuture = new CompletableFuture<>();
         final CompletableFuture<Void> peerDisconnectedFuture = new CompletableFuture<>();
         peerGroup.addConnectedEventListener(Threading.SAME_THREAD, (peer, peerCount) -> peerConnectedFuture.complete(null));
         peerGroup.addDisconnectedEventListener(Threading.SAME_THREAD, (peer, peerCount) -> peerDisconnectedFuture.complete(null));
         // connect to peer but don't do handshake
-        Instant start = TimeUtils.currentTime(); // before connection so we don't get elapsed < timeout
+        Stopwatch watch = Stopwatch.start(); // before connection so we don't get elapsed < timeout
         connectPeerWithoutVersionExchange(0);
         // wait for disconnect (plus a bit more, in case test server is overloaded)
         try {
-            peerDisconnectedFuture.get(timeout + 200, TimeUnit.MILLISECONDS);
+            peerDisconnectedFuture.get(timeout.plusMillis(200).toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             // the checks below suffice for this case too
         }
         // check things after disconnect
         assertFalse(peerConnectedFuture.isDone()); // should never have connected
-        assertTrue(TimeUtils.elapsedTime(start).toMillis() >= timeout); // should not disconnect before timeout
+        watch.stop();
+        assertTrue(watch.toString(), watch.elapsed().compareTo(timeout) >= 0); // should not disconnect before timeout
         assertTrue(peerDisconnectedFuture.isDone()); // but should disconnect eventually
     }
 
@@ -629,8 +633,8 @@ public class PeerGroupTest extends TestWithPeerGroup {
         InboundMessageQueuer p1 = connectPeer(1);
         InboundMessageQueuer p2 = connectPeer(2);
         // Create a P2PK tx.
-        Transaction tx = FakeTxBuilder.createFakeTx(UNITTEST, COIN, key);
-        Transaction tx2 = new Transaction(UNITTEST);
+        Transaction tx = FakeTxBuilder.createFakeTx(COIN, key);
+        Transaction tx2 = new Transaction();
         tx2.addInput(tx.getOutput(0));
         TransactionOutPoint outpoint = tx2.getInput(0).getOutpoint();
         assertTrue(p1.lastReceivedFilter.contains(key.getPubKey()));
@@ -639,9 +643,9 @@ public class PeerGroupTest extends TestWithPeerGroup {
         inbound(p1, tx);
         // p1 requests dep resolution, p2 is quiet.
         assertTrue(outbound(p1) instanceof GetDataMessage);
-        final Sha256Hash dephash = tx.getInput(0).getOutpoint().getHash();
+        final Sha256Hash dephash = tx.getInput(0).getOutpoint().hash();
         final InventoryItem inv = new InventoryItem(InventoryItem.Type.TRANSACTION, dephash);
-        inbound(p1, new NotFoundMessage(UNITTEST, Collections.singletonList(inv)));
+        inbound(p1, new NotFoundMessage(Collections.singletonList(inv)));
         assertNull(outbound(p1));
         assertNull(outbound(p2));
         peerGroup.waitForJobQueue();
@@ -649,7 +653,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         InboundMessageQueuer p3 = connectPeer(3);
         assertTrue(p3.lastReceivedFilter.contains(key.getPubKey()));
         assertTrue(p3.lastReceivedFilter.contains(key.getPubKeyHash()));
-        assertTrue(p3.lastReceivedFilter.contains(outpoint.unsafeBitcoinSerialize()));
+        assertTrue(p3.lastReceivedFilter.contains(outpoint.serialize()));
     }
 
     @Test
@@ -708,10 +712,10 @@ public class PeerGroupTest extends TestWithPeerGroup {
 
         VersionMessage ver1 = new VersionMessage(UNITTEST, 10);
         ver1.clientVersion = bip37ver;
-        ver1.localServices = VersionMessage.NODE_NETWORK;
+        ver1.localServices = Services.of(Services.NODE_NETWORK);
         VersionMessage ver2 = new VersionMessage(UNITTEST, 10);
         ver2.clientVersion = bip111ver;
-        ver2.localServices = VersionMessage.NODE_NETWORK | VersionMessage.NODE_BLOOM;
+        ver2.localServices = Services.of(Services.NODE_NETWORK | Services.NODE_BLOOM);
         peerGroup.start();
         assertFalse(future.isDone());
         connectPeer(1, ver1);
@@ -729,11 +733,11 @@ public class PeerGroupTest extends TestWithPeerGroup {
         CompletableFuture<List<Peer>> future = peerGroup.waitForPeersWithServiceMask(2, 3);
 
         VersionMessage ver1 = new VersionMessage(UNITTEST, 10);
-        ver1.clientVersion = 70000;
-        ver1.localServices = VersionMessage.NODE_NETWORK;
+        ver1.clientVersion = 70001;
+        ver1.localServices = Services.of(Services.NODE_NETWORK);
         VersionMessage ver2 = new VersionMessage(UNITTEST, 10);
-        ver2.clientVersion = 70000;
-        ver2.localServices = VersionMessage.NODE_NETWORK | 2;
+        ver2.clientVersion = 70001;
+        ver2.localServices = Services.of(Services.NODE_NETWORK | 2);
         peerGroup.start();
         assertFalse(future.isDone());
         connectPeer(1, ver1);
@@ -816,7 +820,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         for (ECKey key1 : keys) {
             Address addr = key1.toAddress(ScriptType.P2PKH, UNITTEST.network());
             Block next = FakeTxBuilder.makeSolvedTestBlock(prev, FakeTxBuilder.createFakeTx(UNITTEST, Coin.FIFTY_COINS, addr));
-            expectedBalance = expectedBalance.add(next.getTransactions().get(2).getOutput(0).getValue());
+            expectedBalance = expectedBalance.add(next.getTransactions().get(1).getOutput(0).getValue());
             blocks.add(next);
             prev = next;
         }
@@ -824,7 +828,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         // Send the chain that doesn't have all the transactions in it. The blocks after the exhaustion point should all
         // be ignored.
         int epoch = wallet.getKeyChainGroupCombinedKeyLookaheadEpochs();
-        BloomFilter filter = new BloomFilter(UNITTEST, p1.lastReceivedFilter.bitcoinSerialize());
+        BloomFilter filter = new BloomFilter(ByteBuffer.wrap(p1.lastReceivedFilter.bitcoinSerialize()));
         filterAndSend(p1, blocks, filter);
         Block exhaustionPoint = blocks.get(3);
         pingAndWait(p1);

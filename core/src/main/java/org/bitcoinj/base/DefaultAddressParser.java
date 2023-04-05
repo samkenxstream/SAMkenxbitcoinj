@@ -17,7 +17,7 @@
 package org.bitcoinj.base;
 
 import org.bitcoinj.base.exceptions.AddressFormatException;
-import org.bitcoinj.base.utils.StreamUtils;
+import org.bitcoinj.base.internal.StreamUtils;
 import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.params.Networks;
 
@@ -99,12 +99,12 @@ public class DefaultAddressParser implements AddressParser {
     @Override
     public Address parseAddress(String addressString, Network network) throws AddressFormatException {
         try {
-            return LegacyAddress.fromBase58(network, addressString);
+            return LegacyAddress.fromBase58(addressString, network);
         } catch (AddressFormatException.WrongNetwork x) {
             throw x;
         } catch (AddressFormatException x) {
             try {
-                return SegwitAddress.fromBech32(network, addressString);
+                return SegwitAddress.fromBech32(addressString, network);
             } catch (AddressFormatException.WrongNetwork x2) {
                 throw x;
             } catch (AddressFormatException x2) {
@@ -126,7 +126,7 @@ public class DefaultAddressParser implements AddressParser {
         return segwitNetworks.stream()
                 .filter(n -> hrp.equals(n.segwitAddressHrp()))
                 .findFirst()
-                .map(n -> SegwitAddress.fromBech32(n, bech32))
+                .map(n -> SegwitAddress.fromBech32(bech32, n))
                 .orElseThrow(() -> new AddressFormatException.InvalidPrefix("No network found for " + bech32));
     }
 
@@ -141,10 +141,9 @@ public class DefaultAddressParser implements AddressParser {
             throws AddressFormatException, AddressFormatException.WrongNetwork {
         int version = Base58.decodeChecked(base58)[0] & 0xFF;
         return base58Networks.stream()
-                .map(NetworkParameters::of)
-                .filter(p ->  (version == p.getAddressHeader()) || (version == p.getP2SHHeader()))
+                .filter(n -> version == n.legacyAddressHeader() || version == n.legacyP2SHHeader())
                 .findFirst()
-                .map(p -> LegacyAddress.fromBase58(p.network(), base58))
+                .map(n -> LegacyAddress.fromBase58(base58, n))
                 .orElseThrow(() -> new AddressFormatException.InvalidPrefix("No network found for " + base58));
     }
 

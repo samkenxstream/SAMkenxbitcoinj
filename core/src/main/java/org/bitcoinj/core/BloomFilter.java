@@ -20,7 +20,8 @@ package org.bitcoinj.core;
 import com.google.common.base.MoreObjects;
 import org.bitcoinj.base.Sha256Hash;
 import org.bitcoinj.base.VarInt;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.Buffers;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.script.Script;
 import org.bitcoinj.script.ScriptChunk;
@@ -28,17 +29,19 @@ import org.bitcoinj.script.ScriptPattern;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Math.E;
 import static java.lang.Math.log;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.lang.Math.pow;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
 
 /**
  * <p>A Bloom filter is a probabilistic data structure which can be sent to another client so that it can avoid
@@ -64,7 +67,7 @@ public class BloomFilter extends Message {
     
     private byte[] data;
     private long hashFuncs;
-    private long nTweak;
+    private int nTweak;
     private byte nFlags;
 
     // Same value as Bitcoin Core
@@ -74,19 +77,19 @@ public class BloomFilter extends Message {
     private static final int MAX_HASH_FUNCS = 50;
 
     /**
-     * Construct a BloomFilter by deserializing payloadBytes
+     * Construct a BloomFilter by deserializing payload
      */
-    public BloomFilter(NetworkParameters params, byte[] payloadBytes) throws ProtocolException {
-        super(params, payloadBytes, 0);
+    public BloomFilter(ByteBuffer payload) throws ProtocolException {
+        super(payload);
     }
     
     /**
      * Constructs a filter with the given parameters which is updated on P2PK outputs only.
      */
-    public BloomFilter(int elements, double falsePositiveRate, long randomNonce) {
+    public BloomFilter(int elements, double falsePositiveRate, int randomNonce) {
         this(elements, falsePositiveRate, randomNonce, BloomUpdate.UPDATE_P2PUBKEY_ONLY);
     }
-    
+
     /**
      * <p>Constructs a new Bloom Filter which will provide approximately the given false positive rate when the given
      * number of elements have been inserted. If the filter would otherwise be larger than the maximum allowed size,
@@ -116,7 +119,7 @@ public class BloomFilter extends Message {
      * of this flag is to reduce network round-tripping and avoid over-dirtying the filter for the most common
      * wallet configurations.</p>
      */
-    public BloomFilter(int elements, double falsePositiveRate, long randomNonce, BloomUpdate updateFlag) {
+    public BloomFilter(int elements, double falsePositiveRate, int randomNonce, BloomUpdate updateFlag) {
         // The following formulas were stolen from Wikipedia's page on Bloom Filters (with the addition of min(..., MAX_...))
         //                        Size required for a given number of elements and false-positive rate
         int size = (int)(-1  / (pow(log(2), 2)) * elements * log(falsePositiveRate));
@@ -146,16 +149,15 @@ public class BloomFilter extends Message {
     }
 
     @Override
-    protected void parse() throws ProtocolException {
-        data = readByteArray();
+    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        data = Buffers.readLengthPrefixedBytes(payload);
         if (data.length > MAX_FILTER_SIZE)
             throw new ProtocolException ("Bloom filter out of size range.");
-        hashFuncs = readUint32();
+        hashFuncs = ByteUtils.readUint32(payload);
         if (hashFuncs > MAX_HASH_FUNCS)
             throw new ProtocolException("Bloom filter hash function count out of range");
-        nTweak = readUint32();
-        nFlags = readBytes(1)[0];
-        length = cursor - offset;
+        nTweak = ByteUtils.readInt32(payload);
+        nFlags = payload.get();
     }
     
     /**
@@ -163,10 +165,10 @@ public class BloomFilter extends Message {
      */
     @Override
     protected void bitcoinSerializeToStream(OutputStream stream) throws IOException {
-        stream.write(new VarInt(data.length).encode());
+        stream.write(VarInt.of(data.length).serialize());
         stream.write(data);
-        ByteUtils.uint32ToByteStreamLE(hashFuncs, stream);
-        ByteUtils.uint32ToByteStreamLE(nTweak, stream);
+        ByteUtils.writeInt32LE(hashFuncs, stream);
+        ByteUtils.writeInt32LE(nTweak, stream);
         stream.write(nFlags);
     }
 
@@ -255,7 +257,7 @@ public class BloomFilter extends Message {
 
     /** Inserts the given transaction outpoint. */
     public synchronized void insert(TransactionOutPoint outpoint) {
-        insert(outpoint.unsafeBitcoinSerialize());
+        insert(outpoint.serialize());
     }
 
     /**
@@ -330,8 +332,8 @@ public class BloomFilter extends Message {
                 matched.add(tx);
             }
         }
-        PartialMerkleTree pmt = PartialMerkleTree.buildFromLeaves(block.getParams(), bits, txHashes);
-        FilteredBlock filteredBlock = new FilteredBlock(block.getParams(), block.cloneAsHeader(), pmt);
+        PartialMerkleTree pmt = PartialMerkleTree.buildFromLeaves(bits, txHashes);
+        FilteredBlock filteredBlock = new FilteredBlock(block.cloneAsHeader(), pmt);
         for (Transaction transaction : matched)
             filteredBlock.provideTransaction(transaction);
         return filteredBlock;
@@ -357,7 +359,7 @@ public class BloomFilter extends Message {
         }
         if (found) return true;
         for (TransactionInput input : tx.getInputs()) {
-            if (contains(input.getOutpoint().unsafeBitcoinSerialize())) {
+            if (contains(input.getOutpoint().serialize())) {
                 return true;
             }
             for (ScriptChunk chunk : input.getScriptSig().getChunks()) {

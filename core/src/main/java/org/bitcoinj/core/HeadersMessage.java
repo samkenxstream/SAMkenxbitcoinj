@@ -23,6 +23,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -42,23 +44,23 @@ public class HeadersMessage extends Message {
 
     private List<Block> blockHeaders;
 
-    public HeadersMessage(NetworkParameters params, byte[] payload) throws ProtocolException {
-        super(params, payload, 0);
+    public HeadersMessage(ByteBuffer payload) throws ProtocolException {
+        super(payload);
     }
 
-    public HeadersMessage(NetworkParameters params, Block... headers) throws ProtocolException {
-        super(params);
+    public HeadersMessage(Block... headers) throws ProtocolException {
+        super();
         blockHeaders = Arrays.asList(headers);
     }
 
-    public HeadersMessage(NetworkParameters params, List<Block> headers) throws ProtocolException {
-        super(params);
+    public HeadersMessage(List<Block> headers) throws ProtocolException {
+        super();
         blockHeaders = headers;
     }
 
     @Override
     public void bitcoinSerializeToStream(OutputStream stream) throws IOException {
-        stream.write(new VarInt(blockHeaders.size()).encode());
+        stream.write(VarInt.of(blockHeaders.size()).serialize());
         for (Block header : blockHeaders) {
             header.cloneAsHeader().bitcoinSerializeToStream(stream);
             stream.write(0);
@@ -66,26 +68,19 @@ public class HeadersMessage extends Message {
     }
 
     @Override
-    protected void parse() throws ProtocolException {
-        int numHeaders = readVarInt().intValue();
+    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        int numHeaders = VarInt.read(payload).intValue();
         if (numHeaders > MAX_HEADERS)
             throw new ProtocolException("Too many headers: got " + numHeaders + " which is larger than " +
                                          MAX_HEADERS);
 
         blockHeaders = new ArrayList<>();
-        final BitcoinSerializer serializer = this.params.getSerializer(true);
-
         for (int i = 0; i < numHeaders; ++i) {
-            final Block newBlockHeader = serializer.makeBlock(payload, cursor, UNKNOWN_LENGTH);
+            final Block newBlockHeader = new Block(payload);
             if (newBlockHeader.hasTransactions()) {
                 throw new ProtocolException("Block header does not end with a null byte");
             }
-            cursor += newBlockHeader.optimalEncodingMessageSize;
             blockHeaders.add(newBlockHeader);
-        }
-
-        if (length == UNKNOWN_LENGTH) {
-            length = cursor - offset;
         }
 
         if (log.isDebugEnabled()) {

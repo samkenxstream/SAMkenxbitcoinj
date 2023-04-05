@@ -30,17 +30,24 @@ class DummySerializer extends MessageSerializer {
 
     private static final String DEFAULT_EXCEPTION_MESSAGE = "Dummy serializer cannot serialize/deserialize objects as it does not know which network they belong to.";
 
+    private final int protocolVersion;
+
     public DummySerializer() {
+        this.protocolVersion = 0;
+    }
+
+    public DummySerializer(int protocolVersion) {
+        this.protocolVersion = protocolVersion;
     }
 
     @Override
     public DummySerializer withProtocolVersion(int protocolVersion) {
-        return this;
+        return new DummySerializer(protocolVersion);
     }
 
     @Override
     public int getProtocolVersion() {
-        return 0;
+        return protocolVersion;
     }
 
     @Override
@@ -59,42 +66,37 @@ class DummySerializer extends MessageSerializer {
     }
 
     @Override
-    public boolean isParseRetainMode() {
-        return false;
-    }
-
-    @Override
-    public AddressV1Message makeAddressV1Message(byte[] payloadBytes, int length) throws UnsupportedOperationException {
+    public AddressV1Message makeAddressV1Message(ByteBuffer payload) throws UnsupportedOperationException {
         throw new UnsupportedOperationException(DEFAULT_EXCEPTION_MESSAGE);
     }
 
     @Override
-    public AddressV2Message makeAddressV2Message(byte[] payloadBytes, int length) throws UnsupportedOperationException {
+    public AddressV2Message makeAddressV2Message(ByteBuffer payload) throws UnsupportedOperationException {
         throw new UnsupportedOperationException(DEFAULT_EXCEPTION_MESSAGE);
     }
 
     @Override
-    public Block makeBlock(byte[] payloadBytes, int offset, int length) throws UnsupportedOperationException {
+    public Block makeBlock(ByteBuffer payload) throws UnsupportedOperationException {
         throw new UnsupportedOperationException(DEFAULT_EXCEPTION_MESSAGE);
     }
 
     @Override
-    public Message makeBloomFilter(byte[] payloadBytes) throws UnsupportedOperationException {
+    public Message makeBloomFilter(ByteBuffer payload) throws UnsupportedOperationException {
         throw new UnsupportedOperationException(DEFAULT_EXCEPTION_MESSAGE);
     }
 
     @Override
-    public FilteredBlock makeFilteredBlock(byte[] payloadBytes) throws UnsupportedOperationException {
+    public FilteredBlock makeFilteredBlock(ByteBuffer payload) throws UnsupportedOperationException {
         throw new UnsupportedOperationException(DEFAULT_EXCEPTION_MESSAGE);
     }
 
     @Override
-    public InventoryMessage makeInventoryMessage(byte[] payloadBytes, int length) throws UnsupportedOperationException {
+    public InventoryMessage makeInventoryMessage(ByteBuffer payload) throws UnsupportedOperationException {
         throw new UnsupportedOperationException(DEFAULT_EXCEPTION_MESSAGE);
     }
 
     @Override
-    public Transaction makeTransaction(byte[] payloadBytes, int offset, int length, byte[] hash) throws UnsupportedOperationException {
+    public Transaction makeTransaction(ByteBuffer payload, byte[] hash) throws UnsupportedOperationException {
         throw new UnsupportedOperationException(DEFAULT_EXCEPTION_MESSAGE);
     }
 

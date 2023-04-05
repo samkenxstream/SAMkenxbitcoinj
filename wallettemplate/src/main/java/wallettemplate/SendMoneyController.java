@@ -16,17 +16,15 @@
 
 package wallettemplate;
 
+import javafx.application.Platform;
 import javafx.scene.layout.HBox;
 import org.bitcoinj.base.Address;
 import org.bitcoinj.base.Coin;
+import org.bitcoinj.crypto.AesKey;
 import org.bitcoinj.core.*;
 import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.wallet.SendRequest;
 import org.bitcoinj.wallet.Wallet;
-
-import com.google.common.util.concurrent.FutureCallback;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.MoreExecutors;
 
 import javafx.event.ActionEvent;
 import javafx.scene.control.Button;
@@ -35,15 +33,12 @@ import javafx.scene.control.TextField;
 import org.bitcoinj.walletfx.application.WalletApplication;
 import org.bitcoinj.walletfx.overlay.OverlayController;
 import org.bitcoinj.walletfx.overlay.OverlayableStackPaneController;
-import org.bouncycastle.crypto.params.KeyParameter;
 import org.bitcoinj.walletfx.controls.BitcoinAddressValidator;
 import org.bitcoinj.walletfx.utils.TextFieldValidator;
 import org.bitcoinj.walletfx.utils.WTUtils;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 import static org.bitcoinj.walletfx.utils.GuiUtils.*;
-
-import javax.annotation.Nullable;
 
 public class SendMoneyController implements OverlayController<SendMoneyController> {
     public Button sendBtn;
@@ -58,7 +53,7 @@ public class SendMoneyController implements OverlayController<SendMoneyControlle
     private OverlayableStackPaneController.OverlayUI<? extends OverlayController<SendMoneyController>> overlayUI;
 
     private Wallet.SendResult sendResult;
-    private KeyParameter aesKey;
+    private AesKey aesKey;
 
     @Override
     public void initOverlay(OverlayableStackPaneController overlayableStackPaneController, OverlayableStackPaneController.OverlayUI<? extends OverlayController<SendMoneyController>> ui) {
@@ -97,20 +92,15 @@ public class SendMoneyController implements OverlayController<SendMoneyControlle
             // their own money!
             req.allowUnconfirmed();
             sendResult = app.walletAppKit().wallet().sendCoins(req);
-            Futures.addCallback(sendResult.broadcastComplete, new FutureCallback<>() {
-                @Override
-                public void onSuccess(@Nullable Transaction result) {
-                    checkGuiThread();
-                    overlayUI.done();
-                }
-
-                @Override
-                public void onFailure(Throwable t) {
+            sendResult.awaitRelayed().whenComplete((result, t) -> {
+                if (t == null) {
+                    Platform.runLater(() -> overlayUI.done());
+                } else {
                     // We died trying to empty the wallet.
                     crashAlert(t);
                 }
-            }, MoreExecutors.directExecutor());
-            sendResult.tx.getConfidence().addEventListener((tx, reason) -> {
+            });
+            sendResult.transaction().getConfidence().addEventListener((tx, reason) -> {
                 if (reason == TransactionConfidence.Listener.ChangeReason.SEEN_PEERS)
                     updateTitleForBroadcast();
             });
@@ -145,7 +135,7 @@ public class SendMoneyController implements OverlayController<SendMoneyControlle
     }
 
     private void updateTitleForBroadcast() {
-        final int peers = sendResult.tx.getConfidence().numBroadcastPeers();
+        final int peers = sendResult.transaction().getConfidence().numBroadcastPeers();
         titleLabel.setText(String.format("Broadcasting ... seen by %d peers", peers));
     }
 }

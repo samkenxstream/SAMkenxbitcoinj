@@ -15,7 +15,7 @@
 package org.bitcoinj.core;
 
 import org.bitcoinj.base.VarInt;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.base.internal.InternalUtils;
 import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.crypto.TransactionSignature;
@@ -28,7 +28,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
 
 public class TransactionWitness {
     public static final TransactionWitness EMPTY = new TransactionWitness(0);
@@ -38,7 +38,8 @@ public class TransactionWitness {
      * used as a placeholder.
      */
     public static TransactionWitness redeemP2WPKH(@Nullable TransactionSignature signature, ECKey pubKey) {
-        checkArgument(pubKey.isCompressed(), "only compressed keys allowed");
+        checkArgument(pubKey.isCompressed(), () ->
+                "only compressed keys allowed");
         TransactionWitness witness = new TransactionWitness(2);
         witness.setPush(0, signature != null ? signature.encodeToBitcoin() : new byte[0]); // signature
         witness.setPush(1, pubKey.getPubKey()); // pubkey
@@ -80,10 +81,17 @@ public class TransactionWitness {
         pushes.set(i, value);
     }
 
+    protected int getMessageSize() {
+        int size = VarInt.sizeOf(pushes.size());
+        for (byte[] push : pushes)
+            size += VarInt.sizeOf(push.length) + push.length;
+        return size;
+    }
+
     protected void bitcoinSerializeToStream(OutputStream stream) throws IOException {
-        stream.write(new VarInt(pushes.size()).encode());
+        stream.write(VarInt.of(pushes.size()).serialize());
         for (byte[] push : pushes) {
-            stream.write(new VarInt(push.length).encode());
+            stream.write(VarInt.of(push.length).serialize());
             stream.write(push);
         }
     }

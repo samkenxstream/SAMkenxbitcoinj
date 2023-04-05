@@ -19,6 +19,7 @@ package org.bitcoinj.core;
 
 import com.google.common.collect.Lists;
 import org.bitcoinj.base.Address;
+import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.Coin;
 import org.bitcoinj.base.ScriptType;
 import org.bitcoinj.base.internal.TimeUtils;
@@ -69,7 +70,7 @@ public abstract class AbstractFullPrunedBlockChainTest {
 
     @BeforeClass
     public static void setUpClass() {
-        TimeUtils.resetMocking();
+        TimeUtils.clearMockClock();
         PARAMS = new UnitTestParams() {
             @Override public int getInterval() {
                 return 10000;
@@ -158,8 +159,8 @@ public abstract class AbstractFullPrunedBlockChainTest {
         }
 
         rollingBlock = rollingBlock.createNextBlock(null);
-        Transaction t = new Transaction(PARAMS);
-        t.addOutput(new TransactionOutput(PARAMS, t, FIFTY_COINS, new byte[] {}));
+        Transaction t = new Transaction();
+        t.addOutput(new TransactionOutput(t, FIFTY_COINS, new byte[] {}));
         TransactionInput input = t.addInput(spendableOutput);
         // Invalid script.
         input.clearScriptBytes();
@@ -200,12 +201,12 @@ public abstract class AbstractFullPrunedBlockChainTest {
         }
         
         WeakReference<UTXO> out = new WeakReference<>
-                (store.getTransactionOutput(transactionOutPoint.getHash(), transactionOutPoint.getIndex()));
+                (store.getTransactionOutput(transactionOutPoint.hash(), transactionOutPoint.index()));
         rollingBlock = rollingBlock.createNextBlock(null);
         
-        Transaction t = new Transaction(PARAMS);
+        Transaction t = new Transaction();
         // Entirely invalid scriptPubKey
-        t.addOutput(new TransactionOutput(PARAMS, t, FIFTY_COINS, new byte[]{}));
+        t.addOutput(new TransactionOutput(t, FIFTY_COINS, new byte[]{}));
         t.addSignedInput(transactionOutPoint, spendableOutputScriptPubKey, spendableOutput.getValue(), outKey);
         rollingBlock.addTransaction(t);
         rollingBlock.solve();
@@ -238,7 +239,7 @@ public abstract class AbstractFullPrunedBlockChainTest {
     @Test
     public void testFirst100KBlocks() throws Exception {
         File blockFile = new File(getClass().getResource("first-100k-blocks.dat").getFile());
-        BlockFileLoader loader = new BlockFileLoader(MAINNET, Arrays.asList(blockFile));
+        BlockFileLoader loader = new BlockFileLoader(BitcoinNetwork.MAINNET, Arrays.asList(blockFile));
         
         store = createStore(MAINNET, 10);
         resetStore(store);
@@ -280,8 +281,8 @@ public abstract class AbstractFullPrunedBlockChainTest {
         Address address = toKey.toAddress(ScriptType.P2PKH, PARAMS.network());
         Coin totalAmount = Coin.ZERO;
 
-        Transaction t = new Transaction(PARAMS);
-        t.addOutput(new TransactionOutput(PARAMS, t, amount, toKey));
+        Transaction t = new Transaction();
+        t.addOutput(new TransactionOutput(t, amount, toKey));
         t.addSignedInput(spendableOutputPoint, spendableOutputScriptPubKey, spendableOutput.getValue(), outKey);
         rollingBlock.addTransaction(t);
         rollingBlock.solve();
@@ -318,7 +319,7 @@ public abstract class AbstractFullPrunedBlockChainTest {
         chain.add(rollingBlock);
         Transaction transaction = rollingBlock.getTransactions().get(0);
         TransactionOutput spendableOutput = transaction.getOutput(0);
-        TransactionOutPoint spendableOutPoint = new TransactionOutPoint(PARAMS, 0, transaction.getTxId());
+        TransactionOutPoint spendableOutPoint = new TransactionOutPoint(0, transaction.getTxId());
         Script spendableOutputScriptPubKey = spendableOutput.getScriptPubKey();
         for (int i = 1; i < PARAMS.getSpendableCoinbaseDepth(); i++) {
             rollingBlock = rollingBlock.createNextBlockWithCoinbase(Block.BLOCK_VERSION_GENESIS, outKey.getPubKey(), height++);
@@ -335,8 +336,8 @@ public abstract class AbstractFullPrunedBlockChainTest {
         ECKey toKey = wallet.freshReceiveKey();
         Coin amount = Coin.valueOf(100000000);
 
-        Transaction t = new Transaction(PARAMS);
-        t.addOutput(new TransactionOutput(PARAMS, t, amount, toKey));
+        Transaction t = new Transaction();
+        t.addOutput(new TransactionOutput(t, amount, toKey));
         t.addSignedInput(spendableOutPoint, spendableOutputScriptPubKey, spendableOutput.getValue(), outKey);
         rollingBlock.addTransaction(t);
         rollingBlock.solve();

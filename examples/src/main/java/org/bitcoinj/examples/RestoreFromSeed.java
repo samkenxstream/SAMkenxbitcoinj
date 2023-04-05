@@ -28,6 +28,7 @@ import org.bitcoinj.wallet.KeyChainGroupStructure;
 import org.bitcoinj.wallet.Wallet;
 
 import java.io.File;
+import java.time.Instant;
 
 /**
  * The following example shows you how to restore a HD wallet from a previously generated deterministic seed.
@@ -45,9 +46,9 @@ public class RestoreFromSeed {
         // Here we restore our wallet from a seed with no passphrase. Also have a look at the BackupToMnemonicSeed.java example that shows how to backup a wallet by creating a mnemonic sentence.
         String seedCode = "yard impulse luxury drive today throw farm pepper survey wreck glass federal";
         String passphrase = "";
-        Long creationtime = 1409478661L;
+        Instant creationtime = Instant.ofEpochSecond(1409478661L);
 
-        DeterministicSeed seed = new DeterministicSeed(seedCode, null, passphrase, creationtime);
+        DeterministicSeed seed = DeterministicSeed.ofMnemonic(seedCode, passphrase, creationtime);
 
         // The wallet class provides a easy fromSeed() function that loads a new wallet from a given seed.
         Wallet wallet = Wallet.fromSeed(params, seed, ScriptType.P2PKH);

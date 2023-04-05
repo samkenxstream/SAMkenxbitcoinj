@@ -19,7 +19,7 @@ package org.bitcoinj.params;
 
 import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.internal.TimeUtils;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.core.Block;
 
 /**
@@ -73,7 +73,7 @@ public class UnitTestParams extends BitcoinNetworkParams {
     public Block getGenesisBlock() {
         synchronized (this) {
             if (genesisBlock == null) {
-                genesisBlock = Block.createGenesis(this);
+                genesisBlock = Block.createGenesis();
                 genesisBlock.setDifficultyTarget(Block.EASIEST_DIFFICULTY_TARGET);
                 genesisBlock.setTime(TimeUtils.currentTime());
                 genesisBlock.solve();

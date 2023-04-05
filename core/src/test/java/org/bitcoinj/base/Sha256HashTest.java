@@ -14,29 +14,23 @@
  * limitations under the License.
  */
 
-package org.bitcoinj.base.utils;
+package org.bitcoinj.base;
 
 import org.junit.Test;
 
-import java.util.Arrays;
-import java.util.List;
+import java.nio.Buffer;
+import java.nio.ByteBuffer;
 
 import static org.junit.Assert.assertEquals;
 
-public class StreamUtilsTest {
+public class Sha256HashTest {
     @Test
-    public void convertToUnmodifiableProducesFaithfulCopy() {
-        List<Integer> list = Arrays.asList(1, 2, 3);
-        List<Integer> unmodifiable = list.stream().collect(StreamUtils.toUnmodifiableList());
-
-        assertEquals(list, unmodifiable);
-    }
-
-    @Test(expected = UnsupportedOperationException.class)
-    public void convertToUnmodifiableProducesUnmodifiable() {
-        List<Integer> list = Arrays.asList(1, 2, 3);
-        List<Integer> unmodifiable = list.stream().collect(StreamUtils.toUnmodifiableList());
-
-        unmodifiable.add(666);
+    public void readAndWrite() {
+        Sha256Hash hash = Sha256Hash.of(new byte[32]); // hash should be pseudo-random
+        ByteBuffer buf = ByteBuffer.allocate(Sha256Hash.LENGTH);
+        hash.write(buf);
+        ((Buffer) buf).rewind();
+        Sha256Hash hashCopy = Sha256Hash.read(buf);
+        assertEquals(hash, hashCopy);
     }
 }

@@ -17,19 +17,23 @@
 
 package org.bitcoinj.core;
 
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 
 /**
+ * <p>See <a href="https://github.com/bitcoin/bips/blob/master/bip-0031.mediawiki">BIP31</a> for details.</p>
+ *
  * <p>Instances of this class are not safe for use by multiple threads.</p>
  */
 public class Pong extends Message {
     private long nonce;
 
-    public Pong(NetworkParameters params, byte[] payloadBytes) throws ProtocolException {
-        super(params, payloadBytes, 0);
+    public Pong(ByteBuffer payload) throws ProtocolException {
+        super(payload);
     }
     
     /**
@@ -41,14 +45,13 @@ public class Pong extends Message {
     }
     
     @Override
-    protected void parse() throws ProtocolException {
-        nonce = readInt64();
-        length = 8;
+    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        nonce = ByteUtils.readInt64(payload);
     }
     
     @Override
     public void bitcoinSerializeToStream(OutputStream stream) throws IOException {
-        ByteUtils.int64ToByteStreamLE(nonce, stream);
+        ByteUtils.writeInt64LE(nonce, stream);
     }
     
     /** Returns the nonce sent by the remote peer. */

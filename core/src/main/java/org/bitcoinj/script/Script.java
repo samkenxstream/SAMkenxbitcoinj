@@ -22,9 +22,10 @@ package org.bitcoinj.script;
 import org.bitcoinj.base.Network;
 import org.bitcoinj.base.ScriptType;
 import org.bitcoinj.base.internal.TimeUtils;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.base.Address;
 import org.bitcoinj.base.Coin;
+import org.bitcoinj.core.LockTime;
 import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.base.LegacyAddress;
 import org.bitcoinj.core.NetworkParameters;
@@ -36,14 +37,12 @@ import org.bitcoinj.core.Transaction;
 import org.bitcoinj.core.TransactionInput;
 import org.bitcoinj.core.TransactionOutput;
 import org.bitcoinj.core.TransactionWitness;
-import org.bitcoinj.core.UnsafeByteArrayOutputStream;
 import org.bitcoinj.core.Utils;
 import org.bitcoinj.base.VarInt;
 import org.bitcoinj.core.VerificationException;
 import org.bitcoinj.base.internal.InternalUtils;
 import org.bitcoinj.crypto.TransactionSignature;
 import org.bitcoinj.crypto.internal.CryptoUtils;
-import org.bouncycastle.crypto.digests.RIPEMD160Digest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,8 +52,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -62,11 +63,12 @@ import java.util.EnumSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 import static org.bitcoinj.script.ScriptOpCodes.OP_0;
 import static org.bitcoinj.script.ScriptOpCodes.OP_0NOTEQUAL;
 import static org.bitcoinj.script.ScriptOpCodes.OP_1;
@@ -206,9 +208,10 @@ public class Script {
         CHECKSEQUENCEVERIFY // Enable CHECKSEQUENCEVERIFY operation
     }
     public static final EnumSet<VerifyFlag> ALL_VERIFY_FLAGS = EnumSet.allOf(VerifyFlag.class);
+    private static final BigInteger LOCKTIME_THRESHOLD_BIG = BigInteger.valueOf(LockTime.THRESHOLD);
 
     private static final Logger log = LoggerFactory.getLogger(Script.class);
-    public static final long MAX_SCRIPT_ELEMENT_SIZE = 520;  // bytes
+    public static final int MAX_SCRIPT_ELEMENT_SIZE = 520;  // bytes
     private static final int MAX_OPS_PER_SCRIPT = 201;
     private static final int MAX_STACK_SIZE = 1000;
     private static final int MAX_PUBKEYS_PER_MULTISIG = 20;
@@ -223,8 +226,8 @@ public class Script {
     // must preserve the exact bytes that we read off the wire, along with the parsed form.
     protected byte[] program;
 
-    // Creation time of the associated keys in seconds since the epoch.
-    private long creationTimeSeconds;
+    // Creation time of the associated keys, or null if unknown.
+    @Nullable private Instant creationTime;
 
     /** Creates an empty script that serializes to nothing. */
     private Script() {
@@ -234,32 +237,71 @@ public class Script {
     // Used from ScriptBuilder.
     Script(List<ScriptChunk> chunks) {
         this.chunks = Collections.unmodifiableList(new ArrayList<>(chunks));
-        creationTimeSeconds = TimeUtils.currentTimeSeconds();
+        creationTime = TimeUtils.currentTime();
+    }
+
+    /**
+     * Construct a Script that copies and wraps the programBytes array. The array is parsed and checked for syntactic
+     * validity. Use this if the creation time is not known.
+     * @param programBytes Array of program bytes from a transaction.
+     */
+    public Script(byte[] programBytes) throws ScriptException {
+        this.program = programBytes;
+        parse(programBytes);
+        this.creationTime = null;
     }
 
     /**
      * Construct a Script that copies and wraps the programBytes array. The array is parsed and checked for syntactic
      * validity.
      * @param programBytes Array of program bytes from a transaction.
+     * @param creationTime creation time of the script
      */
-    public Script(byte[] programBytes) throws ScriptException {
-        program = programBytes;
+    public Script(byte[] programBytes, Instant creationTime) throws ScriptException {
+        this.program = programBytes;
         parse(programBytes);
-        creationTimeSeconds = 0;
+        this.creationTime = Objects.requireNonNull(creationTime);
     }
 
-    public Script(byte[] programBytes, long creationTimeSeconds) throws ScriptException {
-        program = programBytes;
-        parse(programBytes);
-        this.creationTimeSeconds = creationTimeSeconds;
+    /**
+     * Gets the creation time of this script, or empty if unknown.
+     * @return creation time of this script, or empty if unknown
+     */
+    public Optional<Instant> creationTime() {
+        return Optional.ofNullable(creationTime);
     }
 
+    /** @deprecated use {@link #creationTime()} */
+    @Deprecated
     public long getCreationTimeSeconds() {
-        return creationTimeSeconds;
+        return creationTime().orElse(Instant.EPOCH).getEpochSecond();
     }
 
-    public void setCreationTimeSeconds(long creationTimeSeconds) {
-        this.creationTimeSeconds = creationTimeSeconds;
+    /**
+     * Sets the creation time of this script.
+     * @param creationTime creation time of this script
+     */
+    public void setCreationTime(Instant creationTime) {
+        this.creationTime = Objects.requireNonNull(creationTime);
+    }
+
+    /**
+     * Clears the creation time of this script. This is mainly used deserialization and cloning. Normally you should not
+     * need to usethis, as keys should have proper creation times whenever possible.
+     */
+    public void clearCreationTime() {
+        this.creationTime = null;
+    }
+
+    /** @deprecated use {@link #setCreationTime(Instant)} */
+    @Deprecated
+    public void setCreationTimeSeconds(long creationTimeSecs) {
+        if (creationTimeSecs > 0)
+            setCreationTime(Instant.ofEpochSecond(creationTimeSecs));
+        else if (creationTimeSecs == 0)
+            clearCreationTime();
+        else
+            throw new IllegalArgumentException("Cannot set creation time to negative value: " + creationTimeSecs);
     }
 
     /**
@@ -327,12 +369,12 @@ public class Script {
             } else if (opcode == OP_PUSHDATA2) {
                 // Read a short, then read that many bytes of data.
                 if (bis.available() < 2) throw new ScriptException(ScriptError.SCRIPT_ERR_UNKNOWN_ERROR, "Unexpected end of script");
-                dataToRead = ByteUtils.readUint16FromStream(bis);
+                dataToRead = ByteUtils.readUint16(bis);
             } else if (opcode == OP_PUSHDATA4) {
                 // Read a uint32, then read that many bytes of data.
                 // Though this is allowed, because its value cannot be > 520, it should never actually be used
                 if (bis.available() < 4) throw new ScriptException(ScriptError.SCRIPT_ERR_UNKNOWN_ERROR, "Unexpected end of script");
-                dataToRead = ByteUtils.readUint32FromStream(bis);
+                dataToRead = ByteUtils.readUint32(bis);
             }
 
             ScriptChunk chunk;
@@ -342,7 +384,7 @@ public class Script {
                 if (dataToRead > bis.available())
                     throw new ScriptException(ScriptError.SCRIPT_ERR_BAD_OPCODE, "Push of data element that is larger than remaining data: " + dataToRead + " vs " + bis.available());
                 byte[] data = new byte[(int)dataToRead];
-                checkState(dataToRead == 0 || bis.read(data, 0, (int)dataToRead) == dataToRead);
+                checkState(dataToRead == 0 || bis.read(data, 0, (int) dataToRead) == dataToRead);
                 chunk = new ScriptChunk(opcode, data);
             }
             // Save some memory by eliminating redundant copies of the same chunk objects.
@@ -372,19 +414,27 @@ public class Script {
     /**
      * Gets the destination address from this script, if it's in the required form.
      */
-    public Address getToAddress(NetworkParameters params) throws ScriptException {
-        return getToAddress(params, false);
+    public Address getToAddress(Network network) throws ScriptException {
+        return getToAddress(network, false);
     }
 
     /**
      * Gets the destination address from this script, if it's in the required form.
-     * 
+     * @deprecated Use {@link #getToAddress(Network)}
+     */
+    @Deprecated
+    public Address getToAddress(NetworkParameters params) throws ScriptException {
+        return getToAddress(params.network(), false);
+    }
+
+    /**
+     * Gets the destination address from this script, if it's in the required form.
+     *
      * @param forcePayToPubKey
      *            If true, allow payToPubKey to be casted to the corresponding address. This is useful if you prefer
      *            showing addresses rather than pubkeys.
      */
-    public Address getToAddress(NetworkParameters params, boolean forcePayToPubKey) throws ScriptException {
-        Network network = params.network();
+    public Address getToAddress(Network network, boolean forcePayToPubKey) throws ScriptException {
         if (ScriptPattern.isP2PKH(this))
             return LegacyAddress.fromPubKeyHash(network, ScriptPattern.extractHashFromP2PKH(this));
         else if (ScriptPattern.isP2SH(this))
@@ -397,6 +447,19 @@ public class Script {
             return SegwitAddress.fromProgram(network, 1, ScriptPattern.extractOutputKeyFromP2TR(this));
         else
             throw new ScriptException(ScriptError.SCRIPT_ERR_UNKNOWN_ERROR, "Cannot cast this script to an address");
+    }
+
+    /**
+     * Gets the destination address from this script, if it's in the required form.
+     *
+     * @param forcePayToPubKey
+     *            If true, allow payToPubKey to be casted to the corresponding address. This is useful if you prefer
+     *            showing addresses rather than pubkeys.
+     * @deprecated Use {@link #getToAddress(Network, boolean)}
+     */
+    @Deprecated
+    public Address getToAddress(NetworkParameters params, boolean forcePayToPubKey) throws ScriptException {
+        return getToAddress(params.network(), forcePayToPubKey);
     }
 
     ////////////////////// Interface for writing scripts from scratch ////////////////////////////////
@@ -415,7 +478,7 @@ public class Script {
             os.write(buf);
         } else if (buf.length < 65536) {
             os.write(OP_PUSHDATA2);
-            ByteUtils.uint16ToByteStreamLE(buf.length, os);
+            ByteUtils.writeInt16LE(buf.length, os);
             os.write(buf);
         } else {
             throw new RuntimeException("Unimplemented");
@@ -447,7 +510,7 @@ public class Script {
     public static byte[] createInputScript(byte[] signature, byte[] pubkey) {
         try {
             // TODO: Do this by creating a Script *first* then having the script reassemble itself into bytes.
-            ByteArrayOutputStream bits = new UnsafeByteArrayOutputStream(signature.length + pubkey.length + 2);
+            ByteArrayOutputStream bits = new ByteArrayOutputStream(signature.length + pubkey.length + 2);
             writeBytes(bits, signature);
             writeBytes(bits, pubkey);
             return bits.toByteArray();
@@ -459,7 +522,7 @@ public class Script {
     public static byte[] createInputScript(byte[] signature) {
         try {
             // TODO: Do this by creating a Script *first* then having the script reassemble itself into bytes.
-            ByteArrayOutputStream bits = new UnsafeByteArrayOutputStream(signature.length + 2);
+            ByteArrayOutputStream bits = new ByteArrayOutputStream(signature.length + 2);
             writeBytes(bits, signature);
             return bits.toByteArray();
         } catch (IOException e) {
@@ -475,14 +538,16 @@ public class Script {
      */
     public Script createEmptyInputScript(@Nullable ECKey key, @Nullable Script redeemScript) {
         if (ScriptPattern.isP2PKH(this)) {
-            checkArgument(key != null, "Key required to create P2PKH input script");
+            checkArgument(key != null, () ->
+                    "key required to create P2PKH input script");
             return ScriptBuilder.createInputScript(null, key);
         } else if (ScriptPattern.isP2WPKH(this)) {
             return ScriptBuilder.createEmpty();
         } else if (ScriptPattern.isP2PK(this)) {
             return ScriptBuilder.createInputScript(null);
         } else if (ScriptPattern.isP2SH(this)) {
-            checkArgument(redeemScript != null, "Redeem script required to create P2SH input script");
+            checkArgument(redeemScript != null, () ->
+                    "redeem script required to create P2SH input script");
             return ScriptBuilder.createP2SHMultiSigInputScript(null, redeemScript);
         } else {
             throw new ScriptException(ScriptError.SCRIPT_ERR_UNKNOWN_ERROR, "Do not understand script type: " + this);
@@ -491,7 +556,8 @@ public class Script {
 
     public TransactionWitness createEmptyWitness(ECKey key) {
         if (ScriptPattern.isP2WPKH(this)) {
-            checkArgument(key != null, "Key required to create P2WPKH witness");
+            checkArgument(key != null, () ->
+                    "key required to create P2WPKH witness");
             return TransactionWitness.EMPTY;
         } else if (ScriptPattern.isP2PK(this) || ScriptPattern.isP2PKH(this)
                 || ScriptPattern.isP2SH(this)) {
@@ -528,7 +594,7 @@ public class Script {
         // and any placeholder OP_0 sigs.
         List<ScriptChunk> existingChunks = chunks.subList(1, chunks.size() - 1);
         ScriptChunk redeemScriptChunk = chunks.get(chunks.size() - 1);
-        checkNotNull(redeemScriptChunk.data);
+        Objects.requireNonNull(redeemScriptChunk.data);
         Script redeemScript = new Script(redeemScriptChunk.data);
 
         int sigCount = 0;
@@ -537,7 +603,7 @@ public class Script {
             if (chunk.opcode == OP_0) {
                 // OP_0, skip
             } else {
-                checkNotNull(chunk.data);
+                Objects.requireNonNull(chunk.data);
                 try {
                     if (myIndex < redeemScript.findSigInRedeem(chunk.data, hash))
                         return sigCount;
@@ -622,8 +688,8 @@ public class Script {
     }
 
     public static int decodeFromOpN(int opcode) {
-        checkArgument((opcode == OP_0 || opcode == OP_1NEGATE) || (opcode >= OP_1 && opcode <= OP_16),
-                "decodeFromOpN called on non OP_N opcode: %s", ScriptOpCodes.getOpCodeName(opcode));
+        checkArgument((opcode == OP_0 || opcode == OP_1NEGATE) || (opcode >= OP_1 && opcode <= OP_16), () ->
+                "decodeFromOpN called on non OP_N opcode: " + ScriptOpCodes.getOpCodeName(opcode));
         if (opcode == OP_0)
             return 0;
         else if (opcode == OP_1NEGATE)
@@ -633,7 +699,8 @@ public class Script {
     }
 
     public static int encodeToOpN(int value) {
-        checkArgument(value >= -1 && value <= 16, "encodeToOpN called for " + value + " which we cannot encode in an opcode.");
+        checkArgument(value >= -1 && value <= 16, () ->
+                "encodeToOpN called for " + value + " which we cannot encode in an opcode");
         if (value == 0)
             return OP_0;
         else if (value == -1)
@@ -699,7 +766,8 @@ public class Script {
     public int getNumberOfBytesRequiredToSpend(@Nullable ECKey pubKey, @Nullable Script redeemScript) {
         if (ScriptPattern.isP2SH(this)) {
             // scriptSig: <sig> [sig] [sig...] <redeemscript>
-            checkArgument(redeemScript != null, "P2SH script requires redeemScript to be spent");
+            checkArgument(redeemScript != null, () ->
+                    "P2SH script requires redeemScript to be spent");
             return redeemScript.getNumberOfSignaturesRequiredToSpend() * SIG_SIZE + redeemScript.getProgram().length;
         } else if (ScriptPattern.isSentToMultisig(this)) {
             // scriptSig: OP_0 <sig> [sig] [sig...]
@@ -740,7 +808,7 @@ public class Script {
      */
     public static byte[] removeAllInstancesOf(byte[] inputScript, byte[] chunkToRemove) {
         // We usually don't end up removing anything
-        UnsafeByteArrayOutputStream bos = new UnsafeByteArrayOutputStream(inputScript.length);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(inputScript.length);
 
         int cursor = 0;
         while (cursor < inputScript.length) {
@@ -1261,12 +1329,9 @@ public class Script {
                 case OP_RIPEMD160:
                     if (stack.size() < 1)
                         throw new ScriptException(ScriptError.SCRIPT_ERR_INVALID_STACK_OPERATION, "Attempted OP_RIPEMD160 on an empty stack");
-                    RIPEMD160Digest digest = new RIPEMD160Digest();
                     byte[] dataToHash = stack.pollLast();
-                    digest.update(dataToHash, 0, dataToHash.length);
-                    byte[] ripmemdHash = new byte[20];
-                    digest.doFinal(ripmemdHash, 0);
-                    stack.add(ripmemdHash);
+                    byte[] ripmeMdHash = CryptoUtils.digestRipeMd160(dataToHash);
+                    stack.add(ripmeMdHash);
                     break;
                 case OP_SHA1:
                     if (stack.size() < 1)
@@ -1366,16 +1431,17 @@ public class Script {
             throw new ScriptException(ScriptError.SCRIPT_ERR_NEGATIVE_LOCKTIME, "Negative locktime");
 
         // There are two kinds of nLockTime, need to ensure we're comparing apples-to-apples
+        LockTime txContainingThisLockTime = txContainingThis.lockTime();
         if (!(
-            ((txContainingThis.getLockTime() <  Transaction.LOCKTIME_THRESHOLD) && (nLockTime.compareTo(Transaction.LOCKTIME_THRESHOLD_BIG)) < 0) ||
-            ((txContainingThis.getLockTime() >= Transaction.LOCKTIME_THRESHOLD) && (nLockTime.compareTo(Transaction.LOCKTIME_THRESHOLD_BIG)) >= 0))
+            ((txContainingThisLockTime instanceof LockTime.HeightLock) && (nLockTime.compareTo(LOCKTIME_THRESHOLD_BIG)) < 0) ||
+            ((txContainingThisLockTime instanceof LockTime.TimeLock) && (nLockTime.compareTo(LOCKTIME_THRESHOLD_BIG)) >= 0))
         )
-            throw new ScriptException(ScriptError.SCRIPT_ERR_UNSATISFIED_LOCKTIME, "Locktime requirement type mismatch");
+            throw new ScriptException(ScriptError.SCRIPT_ERR_UNSATISFIED_LOCKTIME, "Lock time requirement type mismatch");
 
         // Now that we know we're comparing apples-to-apples, the
         // comparison is a simple numeric one.
-        if (nLockTime.compareTo(BigInteger.valueOf(txContainingThis.getLockTime())) > 0)
-            throw new ScriptException(ScriptError.SCRIPT_ERR_UNSATISFIED_LOCKTIME, "Locktime requirement not satisfied");
+        if (nLockTime.compareTo(BigInteger.valueOf(txContainingThisLockTime.rawValue())) > 0)
+            throw new ScriptException(ScriptError.SCRIPT_ERR_UNSATISFIED_LOCKTIME, "Lock time requirement not satisfied");
 
         // Finally the nLockTime feature can be disabled and thus
         // CHECKLOCKTIMEVERIFY bypassed if every txin has been
@@ -1477,7 +1543,7 @@ public class Script {
         byte[] prog = script.getProgram();
         byte[] connectedScript = Arrays.copyOfRange(prog, lastCodeSepLocation, prog.length);
 
-        UnsafeByteArrayOutputStream outStream = new UnsafeByteArrayOutputStream(sigBytes.length + 1);
+        ByteArrayOutputStream outStream = new ByteArrayOutputStream(sigBytes.length + 1);
         try {
             writeBytes(outStream, sigBytes);
         } catch (IOException e) {
@@ -1554,7 +1620,7 @@ public class Script {
         byte[] connectedScript = Arrays.copyOfRange(prog, lastCodeSepLocation, prog.length);
 
         for (byte[] sig : sigs) {
-            UnsafeByteArrayOutputStream outStream = new UnsafeByteArrayOutputStream(sig.length + 1);
+            ByteArrayOutputStream outStream = new ByteArrayOutputStream(sig.length + 1);
             try {
                 writeBytes(outStream, sig);
             } catch (IOException e) {
@@ -1678,7 +1744,7 @@ public class Script {
         // Clone the transaction because executing the script involves editing it, and if we die, we'll leave
         // the tx half broken (also it's not so thread safe to work on it directly.
         try {
-            txContainingThis = txContainingThis.getParams().getDefaultSerializer().makeTransaction(txContainingThis.bitcoinSerialize());
+            txContainingThis = new Transaction(ByteBuffer.wrap(txContainingThis.bitcoinSerialize()));
         } catch (ProtocolException e) {
             throw new RuntimeException(e);   // Should not happen unless we were given a totally broken transaction.
         }

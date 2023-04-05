@@ -20,9 +20,11 @@ import com.google.common.base.MoreObjects;
 import com.google.protobuf.ByteString;
 import org.bitcoinj.base.Network;
 import org.bitcoinj.base.ScriptType;
+import org.bitcoinj.base.internal.Stopwatch;
 import org.bitcoinj.base.internal.TimeUtils;
-import org.bitcoinj.base.utils.ByteUtils;
-import org.bitcoinj.base.utils.StreamUtils;
+import org.bitcoinj.crypto.AesKey;
+import org.bitcoinj.base.internal.ByteUtils;
+import org.bitcoinj.base.internal.StreamUtils;
 import org.bitcoinj.core.BloomFilter;
 import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.core.NetworkParameters;
@@ -42,7 +44,6 @@ import org.bitcoinj.script.Script;
 import org.bitcoinj.utils.ListenerRegistration;
 import org.bitcoinj.utils.Threading;
 import org.bitcoinj.wallet.listeners.KeyChainEventListener;
-import org.bouncycastle.crypto.params.KeyParameter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,14 +57,15 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>A deterministic key chain is a {@link KeyChain} that uses the
@@ -187,7 +189,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         protected SecureRandom random;
         protected int bits = DeterministicSeed.DEFAULT_SEED_ENTROPY_BITS;
         protected String passphrase;
-        protected long creationTimeSecs = 0;
+        @Nullable protected Instant creationTime = null;
         protected byte[] entropy;
         protected DeterministicSeed seed;
         protected ScriptType outputScriptType = ScriptType.P2PKH;
@@ -206,13 +208,22 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
         /**
          * Creates a deterministic key chain starting from the given entropy. All keys yielded by this chain will be the same
-         * if the starting entropy is the same. You should provide the creation time in seconds since the UNIX epoch for the
-         * seed: this lets us know from what part of the chain we can expect to see derived keys appear.
+         * if the starting entropy is the same. You should provide the creation time for the
+         * chain: this lets us know from what part of the chain we can expect to see derived keys appear.
+         * @param entropy entropy to create the chain with
+         * @param creationTime creation time for the chain
          */
-        public T entropy(byte[] entropy, long creationTimeSecs) {
+        public T entropy(byte[] entropy, Instant creationTime) {
             this.entropy = entropy;
-            this.creationTimeSecs = creationTimeSecs;
+            this.creationTime = Objects.requireNonNull(creationTime);
             return self();
+        }
+
+        /** @deprecated use {@link #entropy(byte[], Instant)} */
+        @Deprecated
+        public T entropy(byte[] entropy, long creationTimeSecs) {
+            checkArgument(creationTimeSecs > 0);
+            return entropy(entropy, Instant.ofEpochSecond(creationTimeSecs));
         }
 
         /**
@@ -252,7 +263,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
          * Creates a key chain that watches the given account key.
          */
         public T watch(DeterministicKey accountKey) {
-            checkState(accountPath == null, "either watch or accountPath");
+            checkState(accountPath == null, () ->
+                    "either watch or accountPath");
             this.watchingKey = accountKey;
             this.isFollowing = false;
             return self();
@@ -263,7 +275,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
          * wallet following keychain represents "spouse". Watch key has to be an account key.
          */
         public T watchAndFollow(DeterministicKey accountKey) {
-            checkState(accountPath == null, "either watchAndFollow or accountPath");
+            checkState(accountPath == null, () ->
+                    "either watchAndFollow or accountPath");
             this.watchingKey = accountKey;
             this.isFollowing = true;
             return self();
@@ -273,7 +286,8 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
          * Creates a key chain that can spend from the given account key.
          */
         public T spend(DeterministicKey accountKey) {
-            checkState(accountPath == null, "either spend or accountPath");
+            checkState(accountPath == null, () ->
+                    "either spend or accountPath");
             this.spendingKey = accountKey;
             this.isFollowing = false;
             return self();
@@ -295,23 +309,25 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
          * Use an account path other than the default {@link DeterministicKeyChain#ACCOUNT_ZERO_PATH}.
          */
         public T accountPath(List<ChildNumber> accountPath) {
-            checkState(watchingKey == null, "either watch or accountPath");
-            this.accountPath = HDPath.M(checkNotNull(accountPath));
+            checkState(watchingKey == null, () ->
+                    "either watch or accountPath");
+            this.accountPath = HDPath.M(Objects.requireNonNull(accountPath));
             return self();
         }
 
         public DeterministicKeyChain build() {
-            checkState(passphrase == null || seed == null, "Passphrase must not be specified with seed");
+            checkState(passphrase == null || seed == null, () ->
+                    "passphrase must not be specified with seed");
 
             if (accountPath == null)
                 accountPath = ACCOUNT_ZERO_PATH;
 
             if (random != null)
                 // Default passphrase to "" if not specified
-                return new DeterministicKeyChain(new DeterministicSeed(random, bits, getPassphrase()), null,
+                return new DeterministicKeyChain(DeterministicSeed.ofRandom(random, bits, getPassphrase()), null,
                         outputScriptType, accountPath);
             else if (entropy != null)
-                return new DeterministicKeyChain(new DeterministicSeed(entropy, getPassphrase(), creationTimeSecs),
+                return new DeterministicKeyChain(DeterministicSeed.ofEntropy(entropy, getPassphrase(), creationTime),
                         null, outputScriptType, accountPath);
             else if (seed != null)
                 return new DeterministicKeyChain(seed, null, outputScriptType, accountPath);
@@ -350,10 +366,13 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     public DeterministicKeyChain(DeterministicKey key, boolean isFollowing, boolean isWatching,
             ScriptType outputScriptType) {
         if (isWatching)
-            checkArgument(key.isPubKeyOnly(), "Private subtrees not currently supported for watching keys: if you got this key from DKC.getWatchingKey() then use .dropPrivate().dropParent() on it first.");
+            checkArgument(key.isPubKeyOnly(), () ->
+                    "private subtrees not currently supported for watching keys: if you got this key from DKC.getWatchingKey() then use .dropPrivate().dropParent() on it first");
         else
-            checkArgument(key.hasPrivKey(), "Private subtrees are required.");
-        checkArgument(isWatching || !isFollowing, "Can only follow a key that is watched");
+            checkArgument(key.hasPrivKey(), () ->
+                    "private subtrees are required");
+        checkArgument(isWatching || !isFollowing, () ->
+                "can only follow a key that is watched");
 
         basicKeyChain = new BasicKeyChain();
         this.seed = null;
@@ -379,15 +398,19 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
      */
     protected DeterministicKeyChain(DeterministicSeed seed, @Nullable KeyCrypter crypter,
                                     ScriptType outputScriptType, List<ChildNumber> accountPath) {
-        checkArgument(outputScriptType == null || outputScriptType == ScriptType.P2PKH
-                || outputScriptType == ScriptType.P2WPKH, "Only P2PKH or P2WPKH allowed.");
+        checkArgument(outputScriptType == null || outputScriptType == ScriptType.P2PKH || outputScriptType == ScriptType.P2WPKH, () ->
+                "only P2PKH or P2WPKH allowed");
         this.outputScriptType = outputScriptType != null ? outputScriptType : ScriptType.P2PKH;
         this.accountPath = HDPath.M(accountPath);
         this.seed = seed;
         basicKeyChain = new BasicKeyChain(crypter);
         if (!seed.isEncrypted()) {
-            rootKey = HDKeyDerivation.createMasterPrivateKey(checkNotNull(seed.getSeedBytes()));
-            rootKey.setCreationTimeSeconds(seed.getCreationTimeSeconds());
+            rootKey = HDKeyDerivation.createMasterPrivateKey(Objects.requireNonNull(seed.getSeedBytes()));
+            Optional<Instant> creationTime = seed.creationTime();
+            if (creationTime.isPresent())
+                rootKey.setCreationTime(creationTime.get());
+            else
+                rootKey.clearCreationTime();
             basicKeyChain.importKey(rootKey);
             hierarchy = new DeterministicHierarchy(rootKey);
             for (HDPath path : getAccountPath().ancestors(true)) {
@@ -401,17 +424,18 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     }
 
     /**
-     * For use in encryption when {@link #toEncrypted(KeyCrypter, KeyParameter)} is called, so that
+     * For use in encryption when {@link #toEncrypted(KeyCrypter, AesKey)} is called, so that
      * subclasses can override that method and create an instance of the right class.
      *
      * See also {@link #makeKeyChainFromSeed(DeterministicSeed, List, ScriptType)}
      */
-    protected DeterministicKeyChain(KeyCrypter crypter, KeyParameter aesKey, DeterministicKeyChain chain) {
+    protected DeterministicKeyChain(KeyCrypter crypter, AesKey aesKey, DeterministicKeyChain chain) {
         // Can't encrypt a watching chain.
-        checkNotNull(chain.rootKey);
-        checkNotNull(chain.seed);
+        Objects.requireNonNull(chain.rootKey);
+        Objects.requireNonNull(chain.seed);
 
-        checkArgument(!chain.rootKey.isEncrypted(), "Chain already encrypted");
+        checkArgument(!chain.rootKey.isEncrypted(), () ->
+                "chain already encrypted");
         this.accountPath = chain.getAccountPath();
         this.outputScriptType = chain.outputScriptType;
 
@@ -453,10 +477,10 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         return outputScriptType;
     }
 
-    private DeterministicKey encryptNonLeaf(KeyParameter aesKey, DeterministicKeyChain chain,
+    private DeterministicKey encryptNonLeaf(AesKey aesKey, DeterministicKeyChain chain,
                                             DeterministicKey parent, List<ChildNumber> path) {
         DeterministicKey key = chain.hierarchy.get(path, false, false);
-        key = key.encrypt(checkNotNull(basicKeyChain.getKeyCrypter()), aesKey, parent);
+        key = key.encrypt(Objects.requireNonNull(basicKeyChain.getKeyCrypter()), aesKey, parent);
         putKey(key);
         return key;
     }
@@ -547,12 +571,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
     // Clone key to new hierarchy.
     private static DeterministicKey cloneKey(DeterministicHierarchy hierarchy, DeterministicKey key) {
-        DeterministicKey parent = hierarchy.get(checkNotNull(key.getParent()).getPath(), false, false);
+        DeterministicKey parent = hierarchy.get(Objects.requireNonNull(key.getParent()).getPath(), false, false);
         return new DeterministicKey(key.dropPrivateBytes(), parent);
     }
 
     private void checkForBitFlip(DeterministicKey k) {
-        DeterministicKey parent = checkNotNull(k.getParent());
+        DeterministicKey parent = Objects.requireNonNull(k.getParent());
         byte[] rederived = HDKeyDerivation.deriveChildKeyBytesFromPublic(parent, k.getChildNumber(), HDKeyDerivation.PublicDeriveMode.WITH_INVERSION).keyBytes;
         byte[] actual = k.getPubKey();
         if (!Arrays.equals(rederived, actual))
@@ -710,11 +734,11 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     }
 
     @Override
-    public long getEarliestKeyCreationTime() {
-        if (seed != null)
-            return seed.getCreationTimeSeconds();
-        else
-            return getWatchingKey().getCreationTimeSeconds();
+    public Instant earliestKeyCreationTime() {
+        return (seed != null ?
+                seed.creationTime() :
+                getWatchingKey().creationTime()
+        ).orElse(Instant.EPOCH);
     }
 
     @Override
@@ -851,7 +875,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     addChain(chains, chain, lookaheadSize, sigsRequiredToSpend);
                     chain = null;
                 }
-                long timestamp = key.getCreationTimestamp() / 1000;
+                Instant seedCreationTime = Instant.ofEpochMilli(key.getCreationTimestamp());
                 String passphrase = DEFAULT_PASSPHRASE_FOR_MNEMONIC; // FIXME allow non-empty passphrase
                 if (key.hasSecretBytes()) {
                     if (key.hasEncryptedDeterministicSeed())
@@ -860,7 +884,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     if (key.hasDeterministicSeed()) {
                         seedBytes = key.getDeterministicSeed().toByteArray();
                     }
-                    seed = new DeterministicSeed(key.getSecretBytes().toStringUtf8(), seedBytes, passphrase, timestamp);
+                    seed = new DeterministicSeed(key.getSecretBytes().toStringUtf8(), seedBytes, passphrase, seedCreationTime);
                 } else if (key.hasEncryptedData()) {
                     if (key.hasDeterministicSeed())
                         throw new UnreadableWalletException("Malformed key proto: " + key);
@@ -872,7 +896,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                         encryptedSeedBytes = new EncryptedData(encryptedSeed.getInitialisationVector().toByteArray(),
                                 encryptedSeed.getEncryptedPrivateKey().toByteArray());
                     }
-                    seed = new DeterministicSeed(data, encryptedSeedBytes, timestamp);
+                    seed = new DeterministicSeed(data, encryptedSeedBytes, seedCreationTime);
                 } else {
                     throw new UnreadableWalletException("Malformed key proto: " + key);
                 }
@@ -908,12 +932,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     // If this has a private key but no seed, then all we know is the spending key H
                     if (seed == null && key.hasSecretBytes()) {
                         DeterministicKey accountKey = new DeterministicKey(path, chainCode, pubkey, ByteUtils.bytesToBigInteger(key.getSecretBytes().toByteArray()), null);
-                        accountKey.setCreationTimeSeconds(key.getCreationTimestamp() / 1000);
+                        accountKey.setCreationTime(Instant.ofEpochMilli(key.getCreationTimestamp()));
                         chain = factory.makeSpendingKeyChain(accountKey, isMarried, outputScriptType);
                         isSpendingKey = true;
                     } else if (seed == null) {
                         DeterministicKey accountKey = new DeterministicKey(path, chainCode, pubkey, null, null);
-                        accountKey.setCreationTimeSeconds(key.getCreationTimestamp() / 1000);
+                        accountKey.setCreationTime(Instant.ofEpochMilli(key.getCreationTimestamp()));
                         chain = factory.makeWatchingKeyChain(accountKey, isFollowingKey, isMarried,
                                 outputScriptType);
                         isWatchingAccountKey = true;
@@ -941,7 +965,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                         Protos.EncryptedData proto = key.getEncryptedData();
                         EncryptedData data = new EncryptedData(proto.getInitialisationVector().toByteArray(),
                                 proto.getEncryptedPrivateKey().toByteArray());
-                        checkNotNull(crypter, "Encountered an encrypted key but no key crypter provided");
+                        Objects.requireNonNull(crypter, "Encountered an encrypted key but no key crypter provided");
                         detkey = new DeterministicKey(path, chainCode, crypter, pubkey, data, parent);
                     } else {
                         // No secret key bytes and key is not encrypted: either a watching key or private key bytes
@@ -950,7 +974,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                     }
                 }
                 if (key.hasCreationTimestamp())
-                    detkey.setCreationTimeSeconds(key.getCreationTimestamp() / 1000);
+                    detkey.setCreationTime(Instant.ofEpochMilli(key.getCreationTimestamp()));
                 if (log.isDebugEnabled())
                     log.debug("Deserializing: DETERMINISTIC_KEY: {}", detkey);
                 if (!isWatchingAccountKey) {
@@ -1012,34 +1036,38 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
     @Override
     public DeterministicKeyChain toEncrypted(CharSequence password) {
-        checkNotNull(password);
+        Objects.requireNonNull(password);
         checkArgument(password.length() > 0);
-        checkState(seed != null, "Attempt to encrypt a watching chain.");
+        checkState(seed != null, () ->
+                "attempt to encrypt a watching chain");
         checkState(!seed.isEncrypted());
         KeyCrypter scrypt = new KeyCrypterScrypt();
-        KeyParameter derivedKey = scrypt.deriveKey(password);
+        AesKey derivedKey = scrypt.deriveKey(password);
         return toEncrypted(scrypt, derivedKey);
     }
 
     @Override
-    public DeterministicKeyChain toEncrypted(KeyCrypter keyCrypter, KeyParameter aesKey) {
+    public DeterministicKeyChain toEncrypted(KeyCrypter keyCrypter, AesKey aesKey) {
         return new DeterministicKeyChain(keyCrypter, aesKey, this);
     }
 
     @Override
     public DeterministicKeyChain toDecrypted(CharSequence password) {
-        checkNotNull(password);
+        Objects.requireNonNull(password);
         checkArgument(password.length() > 0);
         KeyCrypter crypter = getKeyCrypter();
-        checkState(crypter != null, "Chain not encrypted");
-        KeyParameter derivedKey = crypter.deriveKey(password);
+        checkState(crypter != null, () ->
+                "chain not encrypted");
+        AesKey derivedKey = crypter.deriveKey(password);
         return toDecrypted(derivedKey);
     }
 
     @Override
-    public DeterministicKeyChain toDecrypted(KeyParameter aesKey) {
-        checkState(getKeyCrypter() != null, "Key chain not encrypted");
-        checkState(seed != null, "Can't decrypt a watching chain");
+    public DeterministicKeyChain toDecrypted(AesKey aesKey) {
+        checkState(getKeyCrypter() != null, () ->
+                "key chain not encrypted");
+        checkState(seed != null, () ->
+                "can't decrypt a watching chain");
         checkState(seed.isEncrypted());
         String passphrase = DEFAULT_PASSPHRASE_FOR_MNEMONIC; // FIXME allow non-empty passphrase
         DeterministicSeed decSeed = seed.decrypt(getKeyCrypter(), passphrase, aesKey);
@@ -1074,16 +1102,19 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
 
     @Override
     public boolean checkPassword(CharSequence password) {
-        checkNotNull(password);
-        checkState(getKeyCrypter() != null, "Key chain not encrypted");
+        Objects.requireNonNull(password);
+        checkState(getKeyCrypter() != null, () ->
+                "key chain not encrypted");
         return checkAESKey(getKeyCrypter().deriveKey(password));
     }
 
     @Override
-    public boolean checkAESKey(KeyParameter aesKey) {
-        checkState(rootKey != null, "Can't check password for a watching chain");
-        checkNotNull(aesKey);
-        checkState(getKeyCrypter() != null, "Key chain not encrypted");
+    public boolean checkAESKey(AesKey aesKey) {
+        checkState(rootKey != null, () ->
+                "can't check password for a watching chain");
+        Objects.requireNonNull(aesKey);
+        checkState(getKeyCrypter() != null, () ->
+                "key chain not encrypted");
         try {
             return rootKey.decrypt(aesKey).getPubKeyPoint().equals(rootKey.getPubKeyPoint());
         } catch (KeyCrypterException e) {
@@ -1110,7 +1141,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
     }
 
     @Override
-    public BloomFilter getFilter(int size, double falsePositiveRate, long tweak) {
+    public BloomFilter getFilter(int size, double falsePositiveRate, int tweak) {
         lock.lock();
         try {
             checkArgument(size >= numBloomFilterEntries());
@@ -1242,12 +1273,12 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         log.info("{} keys needed for {} = {} issued + {} lookahead size + {} lookahead threshold - {} num children",
                 limit, parent.getPathAsString(), issued, lookaheadSize, lookaheadThreshold, numChildren);
 
-        Instant start = TimeUtils.currentTime();
+        Stopwatch watch = Stopwatch.start();
         List<DeterministicKey> result = HDKeyDerivation.generate(parent, numChildren)
                 .limit(limit)
                 .map(DeterministicKey::dropPrivateBytes)
                 .collect(StreamUtils.toUnmodifiableList());
-        log.info("Took {} ms", TimeUtils.elapsedTime(start).toMillis());
+        log.info("Took {}", watch);
         return result;
     }
 
@@ -1422,7 +1453,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         return helper.toString();
     }
 
-    public String toString(boolean includeLookahead, boolean includePrivateKeys, @Nullable KeyParameter aesKey, NetworkParameters params) {
+    public String toString(boolean includeLookahead, boolean includePrivateKeys, @Nullable AesKey aesKey, NetworkParameters params) {
         final DeterministicKey watchingKey = getWatchingKey();
         final StringBuilder builder = new StringBuilder();
         if (seed != null) {
@@ -1437,11 +1468,23 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
                 if (seed.isEncrypted())
                     builder.append("Seed is encrypted\n");
             }
-            builder.append("Seed birthday:     ").append(seed.getCreationTimeSeconds()).append("  [")
-                    .append(TimeUtils.dateTimeFormat(seed.getCreationTimeSeconds() * 1000)).append("]\n");
+            builder.append("Seed birthday:     ");
+            Optional<Instant> seedCreationTime = seed.creationTime();
+            if (seedCreationTime.isPresent())
+                builder.append(seedCreationTime.get().getEpochSecond()).append("  [")
+                        .append(TimeUtils.dateTimeFormat(seedCreationTime.get())).append("]");
+            else
+                builder.append("unknown");
+            builder.append("\n");
         } else {
-            builder.append("Key birthday:      ").append(watchingKey.getCreationTimeSeconds()).append("  [")
-                    .append(TimeUtils.dateTimeFormat(watchingKey.getCreationTimeSeconds() * 1000)).append("]\n");
+            builder.append("Key birthday:      ");
+            Optional<Instant> watchingKeyCreationTime = watchingKey.creationTime();
+            if (watchingKeyCreationTime.isPresent())
+                builder.append(watchingKeyCreationTime.get().getEpochSecond()).append("  [")
+                        .append(TimeUtils.dateTimeFormat(watchingKeyCreationTime.get())).append("]");
+            else
+                builder.append("unknown");
+            builder.append("\n");
         }
         builder.append("Ouput script type: ").append(outputScriptType).append('\n');
         builder.append("Key to watch:      ").append(watchingKey.serializePubB58(params.network(), outputScriptType))
@@ -1451,7 +1494,7 @@ public class DeterministicKeyChain implements EncryptableKeyChain {
         return builder.toString();
     }
 
-    protected void formatAddresses(boolean includeLookahead, boolean includePrivateKeys, @Nullable KeyParameter aesKey,
+    protected void formatAddresses(boolean includeLookahead, boolean includePrivateKeys, @Nullable AesKey aesKey,
             NetworkParameters params, StringBuilder builder) {
         for (DeterministicKey key : getKeys(includeLookahead, true)) {
             String comment = null;

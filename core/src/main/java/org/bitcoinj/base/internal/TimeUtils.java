@@ -16,12 +16,10 @@
 
 package org.bitcoinj.base.internal;
 
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Date;
-import java.util.Locale;
+import java.time.format.DateTimeFormatter;
 import java.util.TimeZone;
 
 /**
@@ -29,101 +27,84 @@ import java.util.TimeZone;
  */
 public class TimeUtils {
     private static final TimeZone UTC = TimeZone.getTimeZone("UTC");
-    /**
-     * If non-null, overrides the return value of now().
-     */
-    private static volatile Date mockTime;
+    // Clock to be used for the return value of now() and currentTime() variants
+    private static volatile Clock clock = Clock.systemUTC();
 
     /**
-     * Advances (or rewinds) the mock clock by the given number of seconds.
-     */
-    public static Date rollMockClock(int seconds) {
-        return rollMockClockMillis(seconds * 1000);
-    }
-
-    /**
-     * Advances (or rewinds) the mock clock by the given number of milliseconds.
-     */
-    public static Date rollMockClockMillis(long millis) {
-        if (mockTime == null)
-            throw new IllegalStateException("You need to use setMockClock() first.");
-        mockTime = new Date(mockTime.getTime() + millis);
-        return mockTime;
-    }
-
-    /**
-     * Sets the mock clock to the current time.
+     * Sets the mock clock to the current time as a fixed instant.
      */
     public static void setMockClock() {
-        mockTime = new Date();
+        setMockClock(Instant.now());
     }
 
     /**
-     * Sets the mock clock to the given time (in seconds).
+     * Sets the mock clock to a fixed instant.
+     * @param fixedInstant a fixed instant
      */
-    public static void setMockClock(long mockClockSeconds) {
-        mockTime = new Date(mockClockSeconds * 1000);
+    public static void setMockClock(Instant fixedInstant) {
+        clock = Clock.fixed(fixedInstant, UTC.toZoneId());
     }
 
     /**
-     * Clears the mock clock and sleep
+     * Rolls an already set mock clock by the given duration.
+     * @param delta amount to roll the mock clock, can be negative
+     * @throws IllegalStateException if the mock clock isn't set
      */
-    public static void resetMocking() {
-        mockTime = null;
+    public static void rollMockClock(Duration delta) {
+        if (clock.equals(Clock.systemUTC()))
+            throw new IllegalStateException("You need to use setMockClock() first.");
+        setMockClock(clock.instant().plus(delta));
     }
 
     /**
-     * Returns the current time, or a mocked out equivalent.
+     * Clears the mock clock and causes time to tick again.
      */
-    public static Date now() {
-        return mockTime != null ? mockTime : new Date();
-    }
-
-    /**
-     * Returns the current time in milliseconds since the epoch, or a mocked out equivalent.
-     */
-    public static long currentTimeMillis() {
-        return mockTime != null ? mockTime.getTime() : System.currentTimeMillis();
-    }
-
-    /**
-     * Returns the current time in seconds since the epoch, or a mocked out equivalent.
-     */
-    public static long currentTimeSeconds() {
-        return currentTimeMillis() / 1000;
+    public static void clearMockClock() {
+        clock = Clock.systemUTC();
     }
 
     /**
      * Returns the current time as an Instant, or a mocked out equivalent.
      */
     public static Instant currentTime() {
-        return Instant.ofEpochMilli(currentTimeMillis());
+        return Instant.now(clock);
     }
 
     /**
      * Returns elapsed time between given start and current time as a Duration.
+     * <p>
+     * Note that this method is affected by the mock clock. If you want to raise real debug data use {@link Stopwatch}.
      */
     public static Duration elapsedTime(Instant start) {
         return Duration.between(start, currentTime());
     }
 
     /**
-     * Formats a given date+time value to an ISO 8601 string.
-     * @param dateTime value to format, as a Date
+     * Determines the earlier of two instants.
      */
-    public static String dateTimeFormat(Date dateTime) {
-        DateFormat iso8601 = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
-        iso8601.setTimeZone(UTC);
-        return iso8601.format(dateTime);
+    public static Instant earlier(Instant time1, Instant time2) {
+        return time1.isBefore(time2) ? time1 : time2;
+    }
+
+    /**
+     * Determines the later of two instants.
+     */
+    public static Instant later(Instant time1, Instant time2) {
+        return time1.isAfter(time2) ? time1 : time2;
+    }
+
+    /**
+     * Determines the longest of two durations.
+     */
+    public static Duration longest(Duration duration1, Duration duration2) {
+        return duration1.compareTo(duration2) > 0 ? duration1 : duration2;
     }
 
     /**
      * Formats a given date+time value to an ISO 8601 string.
-     * @param dateTime value to format, unix time (ms)
+     * @param time date and time to format
      */
-    public static String dateTimeFormat(long dateTime) {
-        DateFormat iso8601 = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
-        iso8601.setTimeZone(UTC);
-        return iso8601.format(dateTime);
+    public static String dateTimeFormat(Instant time) {
+        return DateTimeFormatter.ISO_INSTANT.format(time);
     }
 }

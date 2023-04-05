@@ -19,7 +19,7 @@ package org.bitcoinj.crypto;
 import com.google.common.primitives.Bytes;
 import org.bitcoinj.base.Network;
 import org.bitcoinj.base.ScriptType;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.base.exceptions.AddressFormatException;
 import org.bitcoinj.base.Base58;
 import org.bitcoinj.core.NetworkParameters;
@@ -34,7 +34,7 @@ import java.security.GeneralSecurityException;
 import java.text.Normalizer;
 import java.util.Arrays;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * Implementation of <a href="https://github.com/bitcoin/bips/blob/master/bip-0038.mediawiki">BIP 38</a>

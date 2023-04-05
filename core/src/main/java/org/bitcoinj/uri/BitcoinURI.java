@@ -36,8 +36,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-
-import static com.google.common.base.Preconditions.checkNotNull;
+import java.util.Objects;
 
 /**
  * <p>Provides a standard implementation of a Bitcoin URI with support for the following:</p>
@@ -109,7 +108,7 @@ public class BitcoinURI {
      */
     public BitcoinURI(String uri) throws BitcoinURIParseException {
         // TODO: Discover (via Service Loader mechanism) the correct Network from the URI string
-        this(BitcoinNetwork.MAINNET, uri);
+        this(uri, BitcoinNetwork.MAINNET);
     }
 
     /**
@@ -120,24 +119,23 @@ public class BitcoinURI {
      * @param input The raw URI data to be parsed (see class comments for accepted formats)
      *
      * @throws BitcoinURIParseException If the input fails Bitcoin URI syntax and semantic checks.
-     * @deprecated Use {@link BitcoinURI#BitcoinURI(Network, String)} or {@link BitcoinURI#BitcoinURI(String)}
+     * @deprecated Use {@link BitcoinURI#BitcoinURI(String, Network)} or {@link BitcoinURI#BitcoinURI(String)}
      */
     @Deprecated
     public BitcoinURI(@Nullable NetworkParameters params, String input) throws BitcoinURIParseException {
-        this(params != null ? params.network() : BitcoinNetwork.MAINNET, input);
+        this(input, params != null ? params.network() : BitcoinNetwork.MAINNET);
     }
 
     /**
      * Constructs a new object by trying to parse the input as a valid Bitcoin URI.
      *
+     * @param input   The raw URI data to be parsed (see class comments for accepted formats)
      * @param network The network the URI is from
-     * @param input The raw URI data to be parsed (see class comments for accepted formats)
-     *
      * @throws BitcoinURIParseException If the input fails Bitcoin URI syntax and semantic checks.
      */
-    public BitcoinURI(@Nonnull Network network, String input) throws BitcoinURIParseException {
-        checkNotNull(network);
-        checkNotNull(input);
+    public BitcoinURI(String input, @Nonnull Network network) throws BitcoinURIParseException {
+        Objects.requireNonNull(network);
+        Objects.requireNonNull(input);
 
         String scheme = network.uriScheme();
 
@@ -398,8 +396,8 @@ public class BitcoinURI {
     public static String convertToBitcoinURI(Network network,
                                              String address, @Nullable Coin amount,
                                              @Nullable String label, @Nullable String message) {
-        checkNotNull(network);
-        checkNotNull(address);
+        Objects.requireNonNull(network);
+        Objects.requireNonNull(address);
         if (amount != null && amount.signum() < 0) {
             throw new IllegalArgumentException("Coin must be positive");
         }

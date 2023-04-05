@@ -62,7 +62,7 @@ public class TransactionOutputTest extends TestWithWallet {
         ECKey otherKey = new ECKey();
 
         // Create multi-sig transaction
-        Transaction multiSigTransaction = new Transaction(TESTNET);
+        Transaction multiSigTransaction = new Transaction();
         List<ECKey> keys = Arrays.asList(myKey, otherKey);
 
         Script scriptPubKey = ScriptBuilder.createMultiSigOutputScript(2, keys);
@@ -78,16 +78,16 @@ public class TransactionOutputTest extends TestWithWallet {
     @Test
     public void testP2SHOutputScript() {
         String P2SHAddressString = "35b9vsyH1KoFT5a5KtrKusaCcPLkiSo1tU";
-        Address P2SHAddress = LegacyAddress.fromBase58(BitcoinNetwork.MAINNET, P2SHAddressString);
+        Address P2SHAddress = LegacyAddress.fromBase58(P2SHAddressString, BitcoinNetwork.MAINNET);
         Script script = ScriptBuilder.createOutputScript(P2SHAddress);
-        Transaction tx = new Transaction(MAINNET);
+        Transaction tx = new Transaction();
         tx.addOutput(Coin.COIN, script);
-        assertEquals(P2SHAddressString, tx.getOutput(0).getScriptPubKey().getToAddress(MAINNET).toString());
+        assertEquals(P2SHAddressString, tx.getOutput(0).getScriptPubKey().getToAddress(BitcoinNetwork.MAINNET).toString());
     }
 
     @Test
     public void getAddressTests() {
-        Transaction tx = new Transaction(MAINNET);
+        Transaction tx = new Transaction();
         tx.addOutput(Coin.CENT, ScriptBuilder.createOpReturnScript("hello world!".getBytes()));
         assertTrue(ScriptPattern.isOpReturn(tx.getOutput(0).getScriptPubKey()));
         assertFalse(ScriptPattern.isP2PK(tx.getOutput(0).getScriptPubKey()));
@@ -96,13 +96,25 @@ public class TransactionOutputTest extends TestWithWallet {
 
     @Test
     public void getMinNonDustValue() {
-        TransactionOutput p2pk = new TransactionOutput(TESTNET, null, Coin.COIN, myKey);
+        TransactionOutput p2pk = new TransactionOutput(null, Coin.COIN, myKey);
         assertEquals(Coin.valueOf(576), p2pk.getMinNonDustValue());
-        TransactionOutput p2pkh = new TransactionOutput(TESTNET, null, Coin.COIN, myKey.toAddress(ScriptType.P2PKH,
+        TransactionOutput p2pkh = new TransactionOutput(null, Coin.COIN, myKey.toAddress(ScriptType.P2PKH,
                 BitcoinNetwork.TESTNET));
         assertEquals(Coin.valueOf(546), p2pkh.getMinNonDustValue());
-        TransactionOutput p2wpkh = new TransactionOutput(TESTNET, null, Coin.COIN, myKey.toAddress(ScriptType.P2WPKH,
+        TransactionOutput p2wpkh = new TransactionOutput(null, Coin.COIN, myKey.toAddress(ScriptType.P2WPKH,
                 BitcoinNetwork.TESTNET));
         assertEquals(Coin.valueOf(294), p2wpkh.getMinNonDustValue());
+    }
+
+    @Test
+    public void toString_() {
+        TransactionOutput p2pk = new TransactionOutput(null, Coin.COIN, myKey);
+        p2pk.toString();
+        TransactionOutput p2pkh = new TransactionOutput(null, Coin.COIN, myKey.toAddress(ScriptType.P2PKH,
+                BitcoinNetwork.TESTNET));
+        p2pkh.toString();
+        TransactionOutput p2wpkh = new TransactionOutput(null, Coin.COIN, myKey.toAddress(ScriptType.P2WPKH,
+                BitcoinNetwork.TESTNET));
+        p2wpkh.toString();
     }
 }

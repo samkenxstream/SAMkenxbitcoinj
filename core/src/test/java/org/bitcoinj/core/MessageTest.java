@@ -18,8 +18,12 @@
 package org.bitcoinj.core;
 
 import org.bitcoinj.base.VarInt;
+import org.bitcoinj.base.internal.Buffers;
 import org.bitcoinj.params.TestNet3Params;
 import org.junit.Test;
+
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 
 public class MessageTest {
     private static final NetworkParameters TESTNET = TestNet3Params.get();
@@ -27,38 +31,38 @@ public class MessageTest {
     // If readStr() is vulnerable this causes OutOfMemory
     @Test(expected = ProtocolException.class)
     public void readStrOfExtremeLength() {
-        VarInt length = new VarInt(Integer.MAX_VALUE);
-        byte[] payload = length.encode();
-        new VarStrMessage(TESTNET, payload);
+        VarInt length = VarInt.of(Integer.MAX_VALUE);
+        ByteBuffer payload = ByteBuffer.wrap(length.serialize());
+        new VarStrMessage(payload);
     }
 
     static class VarStrMessage extends Message {
-        public VarStrMessage(NetworkParameters params, byte[] payload) {
-            super(params, payload, 0);
+        public VarStrMessage(ByteBuffer payload) {
+            super(payload);
         }
 
         @Override
-        protected void parse() throws ProtocolException {
-            readStr();
+        protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+            Buffers.readLengthPrefixedString(payload);
         }
     }
 
     // If readBytes() is vulnerable this causes OutOfMemory
     @Test(expected = ProtocolException.class)
     public void readByteArrayOfExtremeLength() {
-        VarInt length = new VarInt(Integer.MAX_VALUE);
-        byte[] payload = length.encode();
-        new VarBytesMessage(TESTNET, payload);
+        VarInt length = VarInt.of(Integer.MAX_VALUE);
+        ByteBuffer payload = ByteBuffer.wrap(length.serialize());
+        new VarBytesMessage(payload);
     }
 
     static class VarBytesMessage extends Message {
-        public VarBytesMessage(NetworkParameters params, byte[] payload) {
-            super(params, payload, 0);
+        public VarBytesMessage(ByteBuffer payload) {
+            super(payload);
         }
 
         @Override
-        protected void parse() throws ProtocolException {
-            readByteArray();
+        protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+            Buffers.readLengthPrefixedBytes(payload);
         }
     }
 }

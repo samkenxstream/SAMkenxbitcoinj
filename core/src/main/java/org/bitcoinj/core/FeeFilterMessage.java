@@ -17,11 +17,14 @@
 package org.bitcoinj.core;
 
 import org.bitcoinj.base.Coin;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.math.BigInteger;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
+
+import static org.bitcoinj.base.internal.Preconditions.check;
 
 /**
  * <p>Represents an "feefilter" message on the P2P network, which instructs a peer to filter transaction invs for
@@ -34,19 +37,20 @@ import java.math.BigInteger;
 public class FeeFilterMessage extends Message {
     private Coin feeRate;
 
-    public FeeFilterMessage(NetworkParameters params, byte[] payloadBytes, BitcoinSerializer serializer, int length) {
-        super(params, payloadBytes, 0, serializer, length);
+    public FeeFilterMessage(ByteBuffer payload) {
+        super(payload);
     }
 
     @Override
     protected void bitcoinSerializeToStream(OutputStream stream) throws IOException {
         super.bitcoinSerializeToStream(stream);
-        ByteUtils.uint64ToByteStreamLE(BigInteger.valueOf(feeRate.value), stream);
+        ByteUtils.writeInt64LE(feeRate.value, stream);
     }
 
     @Override
-    protected void parse() throws ProtocolException {
-        feeRate = Coin.ofSat(readUint64().longValue());
+    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        feeRate = Coin.ofSat(ByteUtils.readInt64(payload));
+        check(feeRate.signum() >= 0, () -> new ProtocolException("fee rate out of range: " + feeRate));
     }
 
     public Coin getFeeRate() {

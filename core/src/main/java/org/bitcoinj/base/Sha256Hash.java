@@ -17,17 +17,20 @@
 
 package org.bitcoinj.base;
 
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 
 import java.io.File;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.nio.BufferOverflowException;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 
-import static com.google.common.base.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
 
 /**
  * A {@code Sha256Hash} wraps a {@code byte[]} so that {@link #equals} and {@link #hashCode} work correctly, allowing it to be used as a key in a
@@ -42,7 +45,8 @@ public class Sha256Hash implements Comparable<Sha256Hash> {
     private final byte[] bytes;
 
     private Sha256Hash(byte[] rawHashBytes) {
-        checkArgument(rawHashBytes.length == LENGTH);
+        checkArgument(rawHashBytes.length == LENGTH, () ->
+                "length must be " + LENGTH + ": " + rawHashBytes.length);
         this.bytes = rawHashBytes;
     }
 
@@ -78,6 +82,20 @@ public class Sha256Hash implements Comparable<Sha256Hash> {
      */
     public static Sha256Hash wrapReversed(byte[] rawHashBytes) {
         return wrap(ByteUtils.reverseBytes(rawHashBytes));
+    }
+
+    /**
+     * Create a new instance by reading from the given buffer.
+     *
+     * @param buf buffer to read from
+     * @return a new instance
+     * @throws BufferUnderflowException if the read hash extends beyond the remaining bytes of the buffer
+     */
+    public static Sha256Hash read(ByteBuffer buf) throws BufferUnderflowException {
+        byte[] b = new byte[32];
+        buf.get(b);
+        // we have to flip it around, as on the wire it's in little endian
+        return Sha256Hash.wrapReversed(b);
     }
 
     /**
@@ -227,8 +245,8 @@ public class Sha256Hash implements Comparable<Sha256Hash> {
      */
     @Override
     public int hashCode() {
-        // Use the last 4 bytes, not the first 4 which are often zeros in Bitcoin.
-        return (int) ByteUtils.readUint32BE(bytes, LENGTH - (4 + 1));
+        // use the last 4 bytes, not the first 4 which are often zeros in Bitcoin
+        return ByteBuffer.wrap(bytes).getInt(LENGTH - Integer.BYTES);
     }
 
     @Override
@@ -251,10 +269,25 @@ public class Sha256Hash implements Comparable<Sha256Hash> {
     }
 
     /**
-     * Returns a reversed copy of the internal byte array.
+     * Allocates a byte array and writes the hash into it, in reversed order.
+     *
+     * @return byte array containing the hash
      */
-    public byte[] getReversedBytes() {
+    public byte[] serialize() {
         return ByteUtils.reverseBytes(bytes);
+    }
+
+    /**
+     * Write hash into the given buffer.
+     *
+     * @param buf buffer to write into
+     * @return the buffer
+     * @throws BufferOverflowException if the hash doesn't fit the remaining buffer
+     */
+    public ByteBuffer write(ByteBuffer buf) throws BufferOverflowException {
+        // we have to flip it around, as on the wire it's in little endian
+        buf.put(serialize());
+        return buf;
     }
 
     @Override

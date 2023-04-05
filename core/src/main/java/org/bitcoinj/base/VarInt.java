@@ -17,7 +17,13 @@
 
 package org.bitcoinj.base;
 
-import org.bitcoinj.base.utils.ByteUtils;
+import java.nio.BufferOverflowException;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Objects;
+
+import static org.bitcoinj.base.internal.Preconditions.check;
 
 /**
  * A variable-length encoded unsigned integer using Satoshi's encoding (a.k.a. "CompactSize").
@@ -26,14 +32,18 @@ public class VarInt {
     private final long value;
     private final int originallyEncodedSize;
 
+    private static final int SIZE_BYTE = Byte.BYTES; // 1 data byte
+    private static final int SIZE_SHORT = Byte.BYTES + Short.BYTES; // 1 marker + 2 data bytes
+    private static final int SIZE_INT = Byte.BYTES + Integer.BYTES; // 1 marker + 4 data bytes
+    private static final int SIZE_LONG = Byte.BYTES + Long.BYTES; // 1 marker + 8 data bytes
+
     /**
      * Constructs a new VarInt with the given unsigned long value.
      *
      * @param value the unsigned long value (beware widening conversion of negatives!)
      */
-    public VarInt(long value) {
-        this.value = value;
-        originallyEncodedSize = getSizeInBytes();
+    public static VarInt of(long value) {
+        return new VarInt(value, sizeOf(value));
     }
 
     /**
@@ -41,22 +51,60 @@ public class VarInt {
      *
      * @param buf the buffer containing the value
      * @param offset the offset of the value
+     * @throws ArrayIndexOutOfBoundsException if offset points outside of the buffer, or
+     *                                        if the value doesn't fit the remaining buffer
      */
-    public VarInt(byte[] buf, int offset) {
-        int first = 0xFF & buf[offset];
+    public static VarInt ofBytes(byte[] buf, int offset) throws ArrayIndexOutOfBoundsException {
+        check(offset >= 0 && offset < buf.length, () ->
+                new ArrayIndexOutOfBoundsException(offset));
+        return read(ByteBuffer.wrap(buf, offset, buf.length - offset));
+    }
+
+    /**
+     * Constructs a new VarInt by reading from the given buffer.
+     *
+     * @param buf buffer to read from
+     * @throws BufferUnderflowException if the read value extends beyond the remaining bytes of the buffer
+     */
+    public static VarInt read(ByteBuffer buf) throws BufferUnderflowException {
+        buf.order(ByteOrder.LITTLE_ENDIAN);
+        int first = Byte.toUnsignedInt(buf.get());
+        long value;
+        int originallyEncodedSize;
         if (first < 253) {
             value = first;
-            originallyEncodedSize = 1; // 1 data byte (8 bits)
+            originallyEncodedSize = SIZE_BYTE;
         } else if (first == 253) {
-            value = ByteUtils.readUint16(buf, offset + 1);
-            originallyEncodedSize = 3; // 1 marker + 2 data bytes (16 bits)
+            value = Short.toUnsignedInt(buf.getShort());
+            originallyEncodedSize = SIZE_SHORT;
         } else if (first == 254) {
-            value = ByteUtils.readUint32(buf, offset + 1);
-            originallyEncodedSize = 5; // 1 marker + 4 data bytes (32 bits)
+            value = Integer.toUnsignedLong(buf.getInt());
+            originallyEncodedSize = SIZE_INT;
         } else {
-            value = ByteUtils.readInt64(buf, offset + 1);
-            originallyEncodedSize = 9; // 1 marker + 8 data bytes (64 bits)
+            value = buf.getLong();
+            originallyEncodedSize = SIZE_LONG;
         }
+        return new VarInt(value, originallyEncodedSize);
+    }
+
+    private VarInt(long value, int originallyEncodedSize) {
+        this.value = value;
+        this.originallyEncodedSize = originallyEncodedSize;
+    }
+
+    /** @deprecated use {@link #of(long)} */
+    @Deprecated
+    public VarInt(long value) {
+        this.value = value;
+        originallyEncodedSize = getSizeInBytes();
+    }
+
+    /** @deprecated use {@link #ofBytes(byte[], int)} */
+    @Deprecated
+    public VarInt(byte[] buf, int offset) {
+        VarInt copy = read(ByteBuffer.wrap(buf, offset, buf.length));
+        value = copy.value;
+        originallyEncodedSize = copy.originallyEncodedSize;
     }
 
     public long longValue() {
@@ -89,38 +137,67 @@ public class VarInt {
      */
     public static int sizeOf(long value) {
         // if negative, it's actually a very large unsigned long value
-        if (value < 0) return 9; // 1 marker + 8 data bytes
-        if (value < 253) return 1; // 1 data byte
-        if (value <= 0xFFFFL) return 3; // 1 marker + 2 data bytes
-        if (value <= 0xFFFFFFFFL) return 5; // 1 marker + 4 data bytes
-        return 9; // 1 marker + 8 data bytes
+        if (value < 0) return SIZE_LONG;
+        if (value < 253) return SIZE_BYTE;
+        if (value <= 0xFFFFL) return SIZE_SHORT;
+        if (value <= 0xFFFFFFFFL) return SIZE_INT;
+        return SIZE_LONG;
     }
 
     /**
-     * Encodes the value into its minimal representation.
+     * Allocates a byte array and serializes the value into its minimal representation.
      *
      * @return the minimal encoded bytes of the value
      */
-    public byte[] encode() {
-        byte[] bytes;
+    public byte[] serialize() {
+        ByteBuffer buf = ByteBuffer.allocate(sizeOf(value));
+        return write(buf).array();
+    }
+
+    /**
+     * Write encoded value into the given buffer.
+     *
+     * @param buf buffer to write into
+     * @return the buffer
+     * @throws BufferOverflowException if the value doesn't fit the remaining buffer
+     */
+    public ByteBuffer write(ByteBuffer buf) throws BufferOverflowException {
+        buf.order(ByteOrder.LITTLE_ENDIAN);
         switch (sizeOf(value)) {
             case 1:
-                return new byte[]{(byte) value};
+                buf.put((byte) value);
+                break;
             case 3:
-                bytes = new byte[3];
-                bytes[0] = (byte) 253;
-                ByteUtils.uint16ToByteArrayLE((int) value, bytes, 1);
-                return bytes;
+                buf.put((byte) 253);
+                buf.putShort((short) value);
+                break;
             case 5:
-                bytes = new byte[5];
-                bytes[0] = (byte) 254;
-                ByteUtils.uint32ToByteArrayLE(value, bytes, 1);
-                return bytes;
+                buf.put((byte) 254);
+                buf.putInt((int) value);
+                break;
             default:
-                bytes = new byte[9];
-                bytes[0] = (byte) 255;
-                ByteUtils.int64ToByteArrayLE(value, bytes, 1);
-                return bytes;
+                buf.put((byte) 255);
+                buf.putLong(value);
+                break;
         }
+        return buf;
+    }
+
+    @Override
+    public String toString() {
+        return Long.toUnsignedString(value);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        // originallyEncodedSize is not considered on purpose
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        return value == ((VarInt) o).value;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(value);
     }
 }

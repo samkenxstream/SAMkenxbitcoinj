@@ -18,9 +18,12 @@
 package org.bitcoinj.core;
 
 import org.bitcoinj.base.Sha256Hash;
+import org.bitcoinj.base.internal.Buffers;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -44,12 +47,12 @@ public class FilteredBlock extends Message {
     // These were relayed as a part of the filteredblock getdata, ie likely weren't previously received as loose transactions
     private Map<Sha256Hash, Transaction> associatedTransactions = new HashMap<>();
     
-    public FilteredBlock(NetworkParameters params, byte[] payloadBytes) throws ProtocolException {
-        super(params, payloadBytes, 0);
+    public FilteredBlock(ByteBuffer payload) throws ProtocolException {
+        super(payload);
     }
 
-    public FilteredBlock(NetworkParameters params, Block header, PartialMerkleTree pmt) {
-        super(params);
+    public FilteredBlock(Block header, PartialMerkleTree pmt) {
+        super();
         this.header = header;
         this.merkleTree = pmt;
     }
@@ -64,14 +67,10 @@ public class FilteredBlock extends Message {
     }
 
     @Override
-    protected void parse() throws ProtocolException {
-        byte[] headerBytes = new byte[Block.HEADER_SIZE];
-        System.arraycopy(payload, 0, headerBytes, 0, Block.HEADER_SIZE);
-        header = params.getDefaultSerializer().makeBlock(headerBytes);
-        
-        merkleTree = new PartialMerkleTree(params, payload, Block.HEADER_SIZE);
-        
-        length = Block.HEADER_SIZE + merkleTree.getMessageSize();
+    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        byte[] headerBytes = Buffers.readBytes(payload, Block.HEADER_SIZE);
+        header = new Block(ByteBuffer.wrap(headerBytes));
+        merkleTree = new PartialMerkleTree(payload);
     }
     
     /**

@@ -19,10 +19,12 @@ package org.bitcoinj.core;
 
 import org.bitcoinj.base.Sha256Hash;
 import org.bitcoinj.base.VarInt;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 
 /**
  * <p>Represents the "getblocks" P2P network message, which requests the hashes of the parts of the block chain we're
@@ -36,30 +38,27 @@ public class GetBlocksMessage extends Message {
     protected BlockLocator locator;
     protected Sha256Hash stopHash;
 
-    public GetBlocksMessage(NetworkParameters params, BlockLocator locator, Sha256Hash stopHash) {
-        super(params);
-        this.version = serializer.getProtocolVersion();
+    public GetBlocksMessage(long protocolVersion, BlockLocator locator, Sha256Hash stopHash) {
+        this.version = protocolVersion;
         this.locator = locator;
         this.stopHash = stopHash;
     }
 
-    public GetBlocksMessage(NetworkParameters params, byte[] payload) throws ProtocolException {
-        super(params, payload, 0);
+    public GetBlocksMessage(ByteBuffer payload) throws ProtocolException {
+        super(payload);
     }
 
     @Override
-    protected void parse() throws ProtocolException {
-        cursor = offset;
-        version = readUint32();
-        int startCount = readVarInt().intValue();
+    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        version = ByteUtils.readUint32(payload);
+        int startCount = VarInt.read(payload).intValue();
         if (startCount > 500)
             throw new ProtocolException("Number of locators cannot be > 500, received: " + startCount);
-        length = cursor - offset + ((startCount + 1) * 32);
         locator = new BlockLocator();
         for (int i = 0; i < startCount; i++) {
-            locator = locator.add(readHash());
+            locator = locator.add(Sha256Hash.read(payload));
         }
-        stopHash = readHash();
+        stopHash = Sha256Hash.read(payload);
     }
 
     public BlockLocator getLocator() {
@@ -78,17 +77,17 @@ public class GetBlocksMessage extends Message {
     @Override
     protected void bitcoinSerializeToStream(OutputStream stream) throws IOException {
         // Version, for some reason.
-        ByteUtils.uint32ToByteStreamLE(serializer.getProtocolVersion(), stream);
+        ByteUtils.writeInt32LE(version, stream);
         // Then a vector of block hashes. This is actually a "block locator", a set of block
         // identifiers that spans the entire chain with exponentially increasing gaps between
         // them, until we end up at the genesis block. See CBlockLocator::Set()
-        stream.write(new VarInt(locator.size()).encode());
+        stream.write(VarInt.of(locator.size()).serialize());
         for (Sha256Hash hash : locator.getHashes()) {
             // Have to reverse as wire format is little endian.
-            stream.write(hash.getReversedBytes());
+            stream.write(hash.serialize());
         }
         // Next, a block ID to stop at.
-        stream.write(stopHash.getReversedBytes());
+        stream.write(stopHash.serialize());
     }
 
     @Override

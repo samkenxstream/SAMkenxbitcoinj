@@ -16,10 +16,10 @@
 
 package org.bitcoinj.wallet;
 
-import com.google.common.collect.Lists;
 import com.google.protobuf.ByteString;
 import org.bitcoinj.base.ScriptType;
-import org.bitcoinj.base.utils.ByteUtils;
+import org.bitcoinj.crypto.AesKey;
+import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.core.BloomFilter;
 import org.bitcoinj.crypto.ECKey;
 import org.bitcoinj.core.NetworkParameters;
@@ -28,20 +28,20 @@ import org.bitcoinj.crypto.DeterministicKey;
 import org.bitcoinj.crypto.KeyCrypter;
 import org.bitcoinj.script.Script;
 import org.bitcoinj.script.ScriptBuilder;
-import org.bouncycastle.crypto.params.KeyParameter;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static org.bitcoinj.base.internal.Preconditions.checkArgument;
+import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
  * <p>A multi-signature keychain using synchronized HD keys (a.k.a HDM)</p>
@@ -71,13 +71,25 @@ public class MarriedKeyChain extends DeterministicKeyChain {
         protected Builder() {
         }
 
+        public T followingKey(DeterministicKey followingKey) {
+            this.followingKeys = Collections.singletonList(followingKey);
+            return self();
+        }
+
         public T followingKeys(List<DeterministicKey> followingKeys) {
             this.followingKeys = followingKeys;
             return self();
         }
 
+        /**
+         * @deprecated Merge the elements and call {@link #followingKeys(List)}
+         */
+        @Deprecated
         public T followingKeys(DeterministicKey followingKey, DeterministicKey ...followingKeys) {
-            this.followingKeys = Lists.asList(followingKey, followingKeys);
+            List<DeterministicKey> tempList = new ArrayList<>();
+            tempList.add(followingKey);
+            tempList.addAll(Arrays.asList(followingKeys));
+            this.followingKeys = tempList;
             return self();
         }
 
@@ -94,7 +106,7 @@ public class MarriedKeyChain extends DeterministicKeyChain {
 
         @Override
         public MarriedKeyChain build() {
-            checkNotNull(followingKeys, "followingKeys must be provided");
+            Objects.requireNonNull(followingKeys, "followingKeys must be provided");
 
             if (threshold == 0)
                 threshold = (followingKeys.size() + 1) / 2 + 1;
@@ -103,9 +115,9 @@ public class MarriedKeyChain extends DeterministicKeyChain {
 
             MarriedKeyChain chain;
             if (random != null)
-                chain = new MarriedKeyChain(new DeterministicSeed(random, bits, getPassphrase()), null, outputScriptType, accountPath);
+                chain = new MarriedKeyChain(DeterministicSeed.ofRandom(random, bits, getPassphrase()), null, outputScriptType, accountPath);
             else if (entropy != null)
-                chain = new MarriedKeyChain(new DeterministicSeed(entropy, getPassphrase(), creationTimeSecs), null,
+                chain = new MarriedKeyChain(DeterministicSeed.ofEntropy(entropy, getPassphrase(), creationTime), null,
                         outputScriptType, accountPath);
             else if (seed != null)
                 chain = new MarriedKeyChain(seed, null, outputScriptType, accountPath);
@@ -156,7 +168,8 @@ public class MarriedKeyChain extends DeterministicKeyChain {
         keys.add(followedKey);
         for (DeterministicKeyChain keyChain : followingKeyChains) {
             DeterministicKey followingKey = keyChain.getKey(purpose);
-            checkState(followedKey.getChildNumber().equals(followingKey.getChildNumber()), "Following keychains should be in sync");
+            checkState(followedKey.getChildNumber().equals(followingKey.getChildNumber()), () ->
+                    "following keychains should be in sync");
             keys.add(followingKey);
         }
         List<ECKey> marriedKeys = Collections.unmodifiableList(keys);
@@ -183,14 +196,17 @@ public class MarriedKeyChain extends DeterministicKeyChain {
     }
 
     private void addFollowingAccountKeys(List<DeterministicKey> followingAccountKeys, int sigsRequiredToSpend) {
-        checkArgument(sigsRequiredToSpend <= followingAccountKeys.size() + 1, "Multisig threshold can't exceed total number of keys");
-        checkState(numLeafKeysIssued() == 0, "Active keychain already has keys in use");
+        checkArgument(sigsRequiredToSpend <= followingAccountKeys.size() + 1, () ->
+                "multisig threshold can't exceed total number of keys");
+        checkState(numLeafKeysIssued() == 0, () ->
+                "active keychain already has keys in use");
         checkState(followingKeyChains == null);
 
         List<DeterministicKeyChain> followingKeyChains = new ArrayList<>();
 
         for (DeterministicKey key : followingAccountKeys) {
-            checkArgument(key.getPath().size() == getAccountPath().size(), "Following keys have to be account keys");
+            checkArgument(key.getPath().size() == getAccountPath().size(), () ->
+                    "following keys have to be account keys");
             DeterministicKeyChain chain = DeterministicKeyChain.builder().watchAndFollow(key)
                     .outputScriptType(getOutputScriptType()).build();
             if (lookaheadSize >= 0)
@@ -237,7 +253,7 @@ public class MarriedKeyChain extends DeterministicKeyChain {
     }
 
     @Override
-    protected void formatAddresses(boolean includeLookahead, boolean includePrivateKeys, @Nullable KeyParameter aesKey,
+    protected void formatAddresses(boolean includeLookahead, boolean includePrivateKeys, @Nullable AesKey aesKey,
             NetworkParameters params, StringBuilder builder) {
         for (DeterministicKeyChain followingChain : followingKeyChains)
             builder.append("Following chain:  ").append(followingChain.getWatchingKey().serializePubB58(params.network()))
@@ -249,11 +265,10 @@ public class MarriedKeyChain extends DeterministicKeyChain {
 
     private void formatScript(Script script, StringBuilder builder, NetworkParameters params) {
         builder.append("  addr:");
-        builder.append(script.getToAddress(params));
+        builder.append(script.getToAddress(params.network()));
         builder.append("  hash160:");
         builder.append(ByteUtils.formatHex(script.getPubKeyHash()));
-        if (script.getCreationTimeSeconds() > 0)
-            builder.append("  creationTimeSeconds:").append(script.getCreationTimeSeconds());
+        script.creationTime().ifPresent(creationTime -> builder.append("  creationTimeSeconds:").append(creationTime));
         builder.append('\n');
     }
 
@@ -262,7 +277,8 @@ public class MarriedKeyChain extends DeterministicKeyChain {
         super.maybeLookAheadScripts();
         int numLeafKeys = getLeafKeys().size();
 
-        checkState(marriedKeysRedeemData.size() <= numLeafKeys, "Number of scripts is greater than number of leaf keys");
+        checkState(marriedKeysRedeemData.size() <= numLeafKeys, () ->
+                "number of scripts is greater than number of leaf keys");
         if (marriedKeysRedeemData.size() == numLeafKeys)
             return;
 
@@ -281,7 +297,7 @@ public class MarriedKeyChain extends DeterministicKeyChain {
     }
 
     @Override
-    public BloomFilter getFilter(int size, double falsePositiveRate, long tweak) {
+    public BloomFilter getFilter(int size, double falsePositiveRate, int tweak) {
         lock.lock();
         BloomFilter filter;
         try {

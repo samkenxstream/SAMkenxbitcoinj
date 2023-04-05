@@ -58,13 +58,13 @@ public class FetchBlock implements Callable<Integer> {
         System.out.println("Connecting to node");
         final Network network = BitcoinNetwork.TESTNET;
         final NetworkParameters params = NetworkParameters.of(network);
-        BlockStore blockStore = new MemoryBlockStore(params);
+        BlockStore blockStore = new MemoryBlockStore(params.getGenesisBlock());
         BlockChain chain = new BlockChain(params, blockStore);
         PeerGroup peerGroup = new PeerGroup(network, chain);
         if (localhost) {
             peerGroup.addPeerDiscovery(new DnsDiscovery(params));
         } else {
-            PeerAddress addr = new PeerAddress(params, InetAddress.getLocalHost());
+            PeerAddress addr = PeerAddress.localhost(params);
             peerGroup.addAddress(addr);
         }
         peerGroup.start();

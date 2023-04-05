@@ -19,19 +19,20 @@ package org.bitcoinj.core;
 
 import com.google.common.io.BaseEncoding;
 import org.bitcoinj.base.VarInt;
+import org.bitcoinj.base.internal.Buffers;
 import org.bitcoinj.base.internal.TimeUtils;
-import org.bitcoinj.base.utils.ByteUtils;
-import org.bouncycastle.jcajce.provider.digest.SHA3;
+import org.bitcoinj.crypto.internal.CryptoUtils;
+import org.bitcoinj.base.internal.ByteUtils;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.math.BigInteger;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
-import java.nio.charset.StandardCharsets;
+import java.nio.BufferUnderflowException;
+import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
@@ -39,8 +40,6 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Stream;
-
-import static com.google.common.base.Preconditions.checkNotNull;
 
 /**
  * <p>A PeerAddress holds an IP address and port number representing the network location of
@@ -51,11 +50,11 @@ import static com.google.common.base.Preconditions.checkNotNull;
  * 
  * <p>Instances of this class are not safe for use by multiple threads.</p>
  */
-public class PeerAddress extends ChildMessage {
+public class PeerAddress extends Message {
     private InetAddress addr;   // Used for IPV4, IPV6, null otherwise or if not-yet-parsed
     private String hostname;    // Used for (.onion addresses) TORV2, TORV3, null otherwise or if not-yet-parsed
     private int port;
-    private BigInteger services;
+    private Services services;
     private Optional<Instant> time;
 
     private static final BaseEncoding BASE32 = BaseEncoding.base32().omitPadding().lowerCase();
@@ -85,24 +84,21 @@ public class PeerAddress extends ChildMessage {
 
     /**
      * Construct a peer address from a serialized payload.
-     * @param params NetworkParameters object.
      * @param payload Bitcoin protocol formatted byte array containing message content.
-     * @param offset The location of the first payload byte within the array.
      * @param serializer the serializer to use for this message.
      * @throws ProtocolException
      */
-    public PeerAddress(NetworkParameters params, byte[] payload, int offset, Message parent, MessageSerializer serializer) throws ProtocolException {
-        super(params, payload, offset, parent, serializer, UNKNOWN_LENGTH);
+    public PeerAddress(ByteBuffer payload, MessageSerializer serializer) throws ProtocolException {
+        super(payload, serializer);
     }
 
     /**
      * Construct a peer address from a memorized or hardcoded address.
      */
-    public PeerAddress(NetworkParameters params, InetAddress addr, int port, BigInteger services, MessageSerializer serializer) {
-        super(params);
-        this.addr = checkNotNull(addr);
+    public PeerAddress(InetAddress addr, int port, Services services, MessageSerializer serializer) {
+        super(serializer);
+        this.addr = Objects.requireNonNull(addr);
         this.port = port;
-        setSerializer(serializer);
         this.services = services;
         this.time = Optional.of(TimeUtils.currentTime().truncatedTo(ChronoUnit.SECONDS));
     }
@@ -110,46 +106,38 @@ public class PeerAddress extends ChildMessage {
     /**
      * Constructs a peer address from the given IP address, port and services. Version number is default for the given parameters.
      */
-    public PeerAddress(NetworkParameters params, InetAddress addr, int port, BigInteger services) {
-        this(params, addr, port, services, params.getDefaultSerializer().withProtocolVersion(0));
+    public PeerAddress(InetAddress addr, int port, Services services) {
+        this(addr, port, services, new DummySerializer(0));
     }
 
     /**
      * Constructs a peer address from the given IP address and port. Version number is default for the given parameters.
      */
-    public PeerAddress(NetworkParameters params, InetAddress addr, int port) {
-        this(params, addr, port, BigInteger.ZERO);
-    }
-
-    /**
-     * Constructs a peer address from the given IP address. Port and version number are default for the given
-     * parameters.
-     */
-    public PeerAddress(NetworkParameters params, InetAddress addr) {
-        this(params, addr, params.getPort());
+    public PeerAddress(InetAddress addr, int port) {
+        this(addr, port, Services.none());
     }
 
     /**
      * Constructs a peer address from an {@link InetSocketAddress}. An InetSocketAddress can take in as parameters an
      * InetAddress or a String hostname. If you want to connect to a .onion, set the hostname to the .onion address.
      */
-    public PeerAddress(NetworkParameters params, InetSocketAddress addr) {
-        this(params, addr.getAddress(), addr.getPort());
+    public PeerAddress(InetSocketAddress addr) {
+        this(addr.getAddress(), addr.getPort());
     }
 
     /**
      * Constructs a peer address from a stringified hostname+port. Use this if you want to connect to a Tor .onion address.
      */
-    public PeerAddress(NetworkParameters params, String hostname, int port) {
-        super(params);
+    public PeerAddress(String hostname, int port) {
+        super();
         this.hostname = hostname;
         this.port = port;
-        this.services = BigInteger.ZERO;
+        this.services = Services.none();
         this.time = Optional.of(TimeUtils.currentTime().truncatedTo(ChronoUnit.SECONDS));
     }
 
     public static PeerAddress localhost(NetworkParameters params) {
-        return new PeerAddress(params, InetAddress.getLoopbackAddress(), params.getPort());
+        return new PeerAddress(InetAddress.getLoopbackAddress(), params.getPort());
     }
 
     @Override
@@ -159,18 +147,18 @@ public class PeerAddress extends ChildMessage {
             throw new IllegalStateException("invalid protocolVersion: " + protocolVersion);
 
         if (protocolVersion >= 1) {
-            ByteUtils.uint32ToByteStreamLE(time.get().getEpochSecond(), stream);
+            ByteUtils.writeInt32LE(time.get().getEpochSecond(), stream);
         }
         if (protocolVersion == 2) {
-            stream.write(new VarInt(services.longValue()).encode());
+            stream.write(VarInt.of(services.bits()).serialize());
             if (addr != null) {
                 if (addr instanceof Inet4Address) {
                     stream.write(0x01);
-                    stream.write(new VarInt(4).encode());
+                    stream.write(VarInt.of(4).serialize());
                     stream.write(addr.getAddress());
                 } else if (addr instanceof Inet6Address) {
                     stream.write(0x02);
-                    stream.write(new VarInt(16).encode());
+                    stream.write(VarInt.of(16).serialize());
                     stream.write(addr.getAddress());
                 } else {
                     throw new IllegalStateException();
@@ -180,18 +168,18 @@ public class PeerAddress extends ChildMessage {
                 if (onionAddress.length == 10) {
                     // TORv2
                     stream.write(0x03);
-                    stream.write(new VarInt(10).encode());
+                    stream.write(VarInt.of(10).serialize());
                     stream.write(onionAddress);
                 } else if (onionAddress.length == 32 + 2 + 1) {
                     // TORv3
                     stream.write(0x04);
-                    stream.write(new VarInt(32).encode());
+                    stream.write(VarInt.of(32).serialize());
                     byte[] pubkey = Arrays.copyOfRange(onionAddress, 0, 32);
                     byte[] checksum = Arrays.copyOfRange(onionAddress, 32, 34);
                     byte torVersion = onionAddress[34];
                     if (torVersion != 0x03)
                         throw new IllegalStateException("version");
-                    if (!Arrays.equals(checksum, onionChecksum(pubkey, torVersion)))
+                    if (!Arrays.equals(checksum, CryptoUtils.onionChecksum(pubkey, torVersion)))
                         throw new IllegalStateException("checksum");
                     stream.write(pubkey);
                 } else {
@@ -201,7 +189,7 @@ public class PeerAddress extends ChildMessage {
                 throw new IllegalStateException();
             }
         } else {
-            ByteUtils.uint64ToByteStreamLE(services, stream);  // nServices.
+            stream.write(services.serialize());
             if (addr != null) {
                 // Java does not provide any utility to map an IPv4 address into IPv6 space, so we have to do it by
                 // hand.
@@ -228,31 +216,25 @@ public class PeerAddress extends ChildMessage {
             }
         }
         // And write out the port. Unlike the rest of the protocol, address and port is in big endian byte order.
-        ByteUtils.uint16ToByteStreamBE(port, stream);
+        ByteUtils.writeInt16BE(port, stream);
     }
 
     @Override
-    protected void parse() throws ProtocolException {
+    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
         int protocolVersion = serializer.getProtocolVersion();
         if (protocolVersion < 0 || protocolVersion > 2)
             throw new IllegalStateException("invalid protocolVersion: " + protocolVersion);
 
-        length = 0;
         if (protocolVersion >= 1) {
-            time = Optional.of(Instant.ofEpochSecond(readUint32()));
-            length += 4;
+            time = Optional.of(Instant.ofEpochSecond(ByteUtils.readUint32(payload)));
         } else {
             time = Optional.empty();
         }
         if (protocolVersion == 2) {
-            VarInt servicesVarInt = readVarInt();
-            length += servicesVarInt.getSizeInBytes();
-            services = BigInteger.valueOf(servicesVarInt.longValue());
-            int networkId = readByte();
-            length += 1;
-            byte[] addrBytes = readByteArray();
+            services = Services.of(VarInt.read(payload).longValue());
+            int networkId = payload.get();
+            byte[] addrBytes = Buffers.readLengthPrefixedBytes(payload);
             int addrLen = addrBytes.length;
-            length += VarInt.sizeOf(addrLen) + addrLen;
             Optional<NetworkId> id = NetworkId.of(networkId);
             if (id.isPresent()) {
                 switch(id.get()) {
@@ -280,7 +262,7 @@ public class PeerAddress extends ChildMessage {
                         byte torVersion = 0x03;
                         byte[] onionAddress = new byte[35];
                         System.arraycopy(addrBytes, 0, onionAddress, 0, 32);
-                        System.arraycopy(onionChecksum(addrBytes, torVersion), 0, onionAddress, 32, 2);
+                        System.arraycopy(CryptoUtils.onionChecksum(addrBytes, torVersion), 0, onionAddress, 32, 2);
                         onionAddress[34] = torVersion;
                         hostname = BASE32.encode(onionAddress) + ".onion";
                         addr = null;
@@ -298,10 +280,8 @@ public class PeerAddress extends ChildMessage {
                 hostname = null;
             }
         } else {
-            services = readUint64();
-            length += 8;
-            byte[] addrBytes = readBytes(16);
-            length += 16;
+            services = Services.read(payload);
+            byte[] addrBytes = Buffers.readBytes(payload, 16);
             if (Arrays.equals(ONIONCAT_PREFIX, Arrays.copyOf(addrBytes, 6))) {
                 byte[] onionAddress = Arrays.copyOfRange(addrBytes, 6, 16);
                 hostname = BASE32.encode(onionAddress) + ".onion";
@@ -310,9 +290,7 @@ public class PeerAddress extends ChildMessage {
                 hostname = null;
             }
         }
-        port = ByteUtils.readUint16BE(payload, cursor);
-        cursor += 2;
-        length += 2;
+        port = ByteUtils.readUint16BE(payload);
     }
 
     private static InetAddress getByAddress(byte[] addrBytes) {
@@ -321,16 +299,6 @@ public class PeerAddress extends ChildMessage {
         } catch (UnknownHostException e) {
             throw new RuntimeException(e);  // Cannot happen.
         }
-    }
-
-    private static byte[] onionChecksum(byte[] pubkey, byte version) {
-        if (pubkey.length != 32)
-            throw new IllegalArgumentException();
-        SHA3.Digest256 digest256 = new SHA3.Digest256();
-        digest256.update(".onion checksum".getBytes(StandardCharsets.US_ASCII));
-        digest256.update(pubkey);
-        digest256.update(version);
-        return Arrays.copyOf(digest256.digest(), 2);
     }
 
     public String getHostname() {
@@ -349,7 +317,7 @@ public class PeerAddress extends ChildMessage {
         return port;
     }
 
-    public BigInteger getServices() {
+    public Services getServices() {
         return services;
     }
 
@@ -358,11 +326,11 @@ public class PeerAddress extends ChildMessage {
      * old `addr` messages).
      * @return time that the node was last seen, or empty if unknown
      */
-    public Optional<Instant> getTimeInstant() {
+    public Optional<Instant> time() {
         return time;
     }
 
-    /** @deprecated use {@link #getTimeInstant()} */
+    /** @deprecated use {@link #time()} */
     @Deprecated
     public long getTime() {
         return time.isPresent() ? time.get().getEpochSecond() : -1;
