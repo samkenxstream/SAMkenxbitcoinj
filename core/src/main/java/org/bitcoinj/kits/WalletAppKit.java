@@ -508,7 +508,7 @@ public class WalletAppKit extends AbstractIdleService implements Closeable {
     }
 
     protected Wallet createWallet() {
-        KeyChainGroup.Builder kcg = KeyChainGroup.builder(params, structure);
+        KeyChainGroup.Builder kcg = KeyChainGroup.builder(network, structure);
         if (restoreFromSeed != null)
             kcg.fromSeed(restoreFromSeed, preferredOutputScriptType);
         else if (restoreFromKey != null)
@@ -516,7 +516,7 @@ public class WalletAppKit extends AbstractIdleService implements Closeable {
         else
             kcg.fromRandom(preferredOutputScriptType);
 
-        return walletFactory.create(params, kcg.build());
+        return walletFactory.create(network, kcg.build());
     }
 
     private void maybeMoveOldWalletOutOfTheWay() {
@@ -571,9 +571,13 @@ public class WalletAppKit extends AbstractIdleService implements Closeable {
         }
     }
 
+    /**
+     * Close and release resources. Implements {@link Closeable}. This should be idempotent.
+     */
     @Override
     public void close() {
         stopAsync();
+        awaitTerminated();
     }
 
     public BitcoinNetwork network() {

@@ -72,7 +72,7 @@ public class ChainSplitTest {
         TimeUtils.setMockClock(); // Use mock clock
         Context.propagate(new Context(100, Coin.ZERO, false, true));
         MemoryBlockStore blockStore = new MemoryBlockStore(TESTNET.getGenesisBlock());
-        wallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH);
+        wallet = Wallet.createDeterministic(BitcoinNetwork.TESTNET, ScriptType.P2PKH);
         ECKey key1 = wallet.freshReceiveKey();
         ECKey key2 = wallet.freshReceiveKey();
         chain = new BlockChain(TESTNET, wallet, blockStore);
@@ -191,8 +191,8 @@ public class ChainSplitTest {
         wallet.commitTx(spend);
         // Waiting for confirmation ... make it eligible for selection.
         assertEquals(Coin.ZERO, wallet.getBalance());
-        spend.getConfidence().markBroadcastBy(new PeerAddress(InetAddress.getByAddress(new byte[]{1, 2, 3, 4}), TESTNET.getPort()));
-        spend.getConfidence().markBroadcastBy(new PeerAddress(InetAddress.getByAddress(new byte[]{5,6,7,8}), TESTNET.getPort()));
+        spend.getConfidence().markBroadcastBy(PeerAddress.simple(InetAddress.getByAddress(new byte[]{1, 2, 3, 4}), TESTNET.getPort()));
+        spend.getConfidence().markBroadcastBy(PeerAddress.simple(InetAddress.getByAddress(new byte[]{5,6,7,8}), TESTNET.getPort()));
         assertEquals(ConfidenceType.PENDING, spend.getConfidence().getConfidenceType());
         assertEquals(valueOf(40, 0), wallet.getBalance());
         Block b2 = b1.createNextBlock(someOtherGuy);
@@ -271,7 +271,7 @@ public class ChainSplitTest {
     }
 
     private Block roundtrip(Block b2) throws ProtocolException {
-        return TESTNET.getDefaultSerializer().makeBlock(ByteBuffer.wrap(b2.bitcoinSerialize()));
+        return TESTNET.getDefaultSerializer().makeBlock(ByteBuffer.wrap(b2.serialize()));
     }
 
     @Test
@@ -513,7 +513,7 @@ public class ChainSplitTest {
         // This covers issue 468.
 
         // Receive some money to the wallet.
-        Transaction t1 = FakeTxBuilder.createFakeTx(TESTNET, COIN, coinsTo);
+        Transaction t1 = FakeTxBuilder.createFakeTx(TESTNET.network(), COIN, coinsTo);
         final Block b1 = FakeTxBuilder.makeSolvedTestBlock(TESTNET.getGenesisBlock(), t1);
         chain.add(b1);
 

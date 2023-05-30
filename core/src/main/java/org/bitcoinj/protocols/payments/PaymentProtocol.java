@@ -345,7 +345,7 @@ public class PaymentProtocol {
             @Nullable List<Protos.Output> refundOutputs, @Nullable String memo, @Nullable byte[] merchantData) {
         Protos.Payment.Builder builder = Protos.Payment.newBuilder();
         for (Transaction transaction : transactions) {
-            builder.addTransactions(ByteString.copyFrom(transaction.bitcoinSerialize()));
+            builder.addTransactions(ByteString.copyFrom(transaction.serialize()));
         }
         if (refundOutputs != null) {
             for (Protos.Output output : refundOutputs)
@@ -434,7 +434,7 @@ public class PaymentProtocol {
         } else {
             output.setAmount(0);
         }
-        output.setScript(ByteString.copyFrom(ScriptBuilder.createOutputScript(address).getProgram()));
+        output.setScript(ByteString.copyFrom(ScriptBuilder.createOutputScript(address).program()));
         return output.build();
     }
 

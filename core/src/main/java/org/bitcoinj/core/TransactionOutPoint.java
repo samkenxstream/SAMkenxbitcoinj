@@ -55,10 +55,10 @@ public class TransactionOutPoint {
     private final long index;
 
     // This is not part of bitcoin serialization. It points to the connected transaction.
-    Transaction fromTx;
+    final Transaction fromTx;
 
     // The connected output.
-    TransactionOutput connectedOutput;
+    final TransactionOutput connectedOutput;
 
     /**
      * Deserialize this transaction outpoint from a given payload.
@@ -74,24 +74,24 @@ public class TransactionOutPoint {
     }
 
     public TransactionOutPoint(long index, Transaction fromTx) {
-        super();
-        checkArgument(index >= 0 && index <= ByteUtils.MAX_UNSIGNED_INTEGER, () ->
-                "index out of range: " + index);
-        this.index = index;
-        this.hash = fromTx.getTxId();
-        this.fromTx = fromTx;
+        this(fromTx.getTxId(), index, fromTx, null);
     }
 
     public TransactionOutPoint(long index, Sha256Hash hash) {
-        super();
-        checkArgument(index >= 0 && index <= ByteUtils.MAX_UNSIGNED_INTEGER, () ->
-                "index out of range: " + index);
-        this.index = index;
-        this.hash = hash;
+        this(hash, index, null, null);
     }
 
     public TransactionOutPoint(TransactionOutput connectedOutput) {
-        this(connectedOutput.getIndex(), connectedOutput.getParentTransactionHash());
+        this(connectedOutput.getParentTransactionHash(), connectedOutput.getIndex(), null, connectedOutput);
+    }
+
+    private TransactionOutPoint(Sha256Hash hash, long index, @Nullable Transaction fromTx,
+                                @Nullable TransactionOutput connectedOutput) {
+        this.hash = Objects.requireNonNull(hash);
+        checkArgument(index >= 0 && index <= ByteUtils.MAX_UNSIGNED_INTEGER, () ->
+                "index out of range: " + index);
+        this.index = index;
+        this.fromTx = fromTx;
         this.connectedOutput = connectedOutput;
     }
 
@@ -137,7 +137,7 @@ public class TransactionOutPoint {
     @Nullable
     public TransactionOutput getConnectedOutput() {
         if (fromTx != null) {
-            return fromTx.getOutputs().get((int) index);
+            return fromTx.getOutput(index);
         } else if (connectedOutput != null) {
             return connectedOutput;
         }
@@ -210,6 +210,31 @@ public class TransactionOutPoint {
         }
     }
 
+    /**
+     * Returns a copy of this outpoint, but with the connectedOutput removed.
+     * @return outpoint with removed connectedOutput
+     */
+    public TransactionOutPoint disconnectOutput() {
+        return new TransactionOutPoint(hash, index, fromTx, null);
+    }
+
+    /**
+     * Returns a copy of this outpoint, but with the provided transaction as fromTx.
+     * @param transaction transaction to set as fromTx
+     * @return outpoint with fromTx set
+     */
+    public TransactionOutPoint connectTransaction(Transaction transaction) {
+        return new TransactionOutPoint(hash, index, Objects.requireNonNull(transaction), connectedOutput);
+    }
+
+    /**
+     * Returns a copy of this outpoint, but with fromTx removed.
+     * @return outpoint with removed fromTx
+     */
+    public TransactionOutPoint disconnectTransaction() {
+        return new TransactionOutPoint(hash, index, null, connectedOutput);
+    }
+
     @Override
     public String toString() {
         return hash + ":" + index;
@@ -250,11 +275,11 @@ public class TransactionOutPoint {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         TransactionOutPoint other = (TransactionOutPoint) o;
-        return index() == other.index() && hash().equals(other.hash());
+        return index == other.index && hash.equals(other.hash);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(index(), hash());
+        return Objects.hash(index, hash);
     }
 }

@@ -72,12 +72,12 @@ public class ParseByteCacheTest {
     public void setUp() throws Exception {
         TimeUtils.setMockClock(); // Use mock clock
         Context.propagate(new Context(100, Transaction.DEFAULT_TX_FEE, false, true));
-        Wallet wallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH);
+        Wallet wallet = Wallet.createDeterministic(BitcoinNetwork.TESTNET, ScriptType.P2PKH);
         wallet.freshReceiveKey();
 
         resetBlockStore();
         
-        Transaction tx1 = createFakeTx(TESTNET,
+        Transaction tx1 = createFakeTx(TESTNET.network(),
                 valueOf(2, 0),
                 wallet.currentReceiveKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET));
         
@@ -88,7 +88,7 @@ public class ParseByteCacheTest {
         // Connect it.
         tx1.addInput(prevOut);
         
-        Transaction tx2 = createFakeTx(TESTNET, COIN,
+        Transaction tx2 = createFakeTx(TESTNET.network(), COIN,
                 new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET));
 
         Block b1 = createFakeBlock(blockStore, BLOCK_HEIGHT_GENESIS, tx1, tx2).block;
@@ -98,17 +98,17 @@ public class ParseByteCacheTest {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         serializer.serialize(tx1, bos);
         tx1BytesWithHeader = bos.toByteArray();
-        tx1Bytes = tx1.bitcoinSerialize();
+        tx1Bytes = tx1.serialize();
         
         bos.reset();
         serializer.serialize(tx2, bos);
         tx2BytesWithHeader = bos.toByteArray();
-        tx2Bytes = tx2.bitcoinSerialize();
+        tx2Bytes = tx2.serialize();
         
         bos.reset();
         serializer.serialize(b1, bos);
         b1BytesWithHeader = bos.toByteArray();
-        b1Bytes = b1.bitcoinSerialize();
+        b1Bytes = b1.serialize();
     }
     
     @Test
@@ -217,7 +217,7 @@ public class ParseByteCacheTest {
         if (b1.getTransactions().size() > 0) {
             Transaction tx1 = b1.getTransactions().get(0);
             
-            TransactionInput tin = tx1.getInputs().get(0);
+            TransactionInput tin = tx1.getInput(0);
 
             // does it still match ref tx?
             bos.reset();
@@ -235,9 +235,9 @@ public class ParseByteCacheTest {
             Transaction tx1 = b1.getTransactions().get(0);
             
             if (tx1.getInputs().size() > 0) {
-                tx1.addInput(tx1.getInputs().get(0));
+                tx1.addInput(tx1.getInput(0));
                 // replicate on reference tx
-                bRef.getTransactions().get(0).addInput(bRef.getTransactions().get(0).getInputs().get(0));
+                bRef.getTransactions().get(0).addInput(bRef.getTransactions().get(0).getInput(0));
                 
                 bos.reset();
                 serializerRef.serialize(bRef, bos);
@@ -265,11 +265,11 @@ public class ParseByteCacheTest {
             Transaction tx2 = b2.getTransactions().get(0);
             
             if (tx1.getInputs().size() > 0) {
-                TransactionInput fromTx1 = tx1.getInputs().get(0);
+                TransactionInput fromTx1 = tx1.getInput(0);
                 tx2.addInput(fromTx1);
                 
                 // replicate on reference tx
-                TransactionInput fromTxRef = bRef.getTransactions().get(0).getInputs().get(0);
+                TransactionInput fromTxRef = bRef.getTransactions().get(0).getInput(0);
                 bRef2.getTransactions().get(0).addInput(fromTxRef);
                 
                 bos.reset();
@@ -322,7 +322,7 @@ public class ParseByteCacheTest {
         // retrieve a value from a child
         t1.getInputs();
         if (t1.getInputs().size() > 0) {
-            TransactionInput tin = t1.getInputs().get(0);
+            TransactionInput tin = t1.getInput(0);
 
             // does it still match ref tx?
             serDeser(serializer, t1, bos.toByteArray(), null, null);
@@ -335,10 +335,10 @@ public class ParseByteCacheTest {
         // add an input
         if (t1.getInputs().size() > 0) {
 
-            t1.addInput(t1.getInputs().get(0));
+            t1.addInput(t1.getInput(0));
 
             // replicate on reference tx
-            tRef.addInput(tRef.getInputs().get(0));
+            tRef.addInput(tRef.getInput(0));
 
             bos.reset();
             serializerRef.serialize(tRef, bos);

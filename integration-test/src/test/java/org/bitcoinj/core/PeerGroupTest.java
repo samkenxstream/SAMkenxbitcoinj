@@ -246,7 +246,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         assertEquals(tmp, expectedPeers);
 
         Coin value = COIN;
-        Transaction t1 = FakeTxBuilder.createFakeTx(UNITTEST, value, address);
+        Transaction t1 = FakeTxBuilder.createFakeTx(UNITTEST.network(), value, address);
         InventoryMessage inv = new InventoryMessage();
         inv.addTransaction(t1);
 
@@ -275,7 +275,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         // Create a peer.
         InboundMessageQueuer p1 = connectPeer(1);
         
-        Wallet wallet2 = Wallet.createDeterministic(UNITTEST, ScriptType.P2PKH);
+        Wallet wallet2 = Wallet.createDeterministic(UNITTEST.network(), ScriptType.P2PKH);
         ECKey key2 = wallet2.freshReceiveKey();
         Address address2 = key2.toAddress(ScriptType.P2PKH, UNITTEST.network());
         
@@ -286,7 +286,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         assertEquals(MemoryPoolMessage.class, waitForOutbound(p1).getClass());
 
         Coin value = COIN;
-        Transaction t1 = FakeTxBuilder.createFakeTx(UNITTEST, value, address2);
+        Transaction t1 = FakeTxBuilder.createFakeTx(UNITTEST.network(), value, address2);
         InventoryMessage inv = new InventoryMessage();
         inv.addTransaction(t1);
 
@@ -387,7 +387,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         InboundMessageQueuer p2 = connectPeer(2);
         InboundMessageQueuer p3 = connectPeer(3);
 
-        Transaction tx = FakeTxBuilder.createFakeTx(UNITTEST, valueOf(20, 0), address);
+        Transaction tx = FakeTxBuilder.createFakeTx(UNITTEST.network(), valueOf(20, 0), address);
         InventoryMessage inv = new InventoryMessage();
         inv.addTransaction(tx);
 
@@ -436,7 +436,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         final Instant now = TimeUtils.currentTime().truncatedTo(ChronoUnit.SECONDS);
         peerGroup.start();
         assertTrue(peerGroup.fastCatchupTime().isAfter(now.minusSeconds(WEEK).minusSeconds(10000)));
-        Wallet w2 = Wallet.createDeterministic(UNITTEST, ScriptType.P2PKH);
+        Wallet w2 = Wallet.createDeterministic(UNITTEST.network(), ScriptType.P2PKH);
         ECKey key1 = new ECKey();
         key1.setCreationTime(now.minus(1, ChronoUnit.DAYS));  // One day ago.
         w2.importKey(key1);
@@ -457,7 +457,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         peerGroup.start();
         peerGroup.setPingIntervalMsec(0);
         VersionMessage versionMessage = new VersionMessage(UNITTEST, 2);
-        versionMessage.clientVersion = NetworkParameters.ProtocolVersion.BLOOM_FILTER.getBitcoinProtocolVersion();
+        versionMessage.clientVersion = ProtocolVersion.BLOOM_FILTER.intValue();
         versionMessage.localServices = Services.of(Services.NODE_NETWORK);
         connectPeer(1, versionMessage);
         peerGroup.waitForPeers(1).get();
@@ -469,16 +469,16 @@ public class PeerGroupTest extends TestWithPeerGroup {
         peerGroup.start();
         peerGroup.setPingIntervalMsec(100);
         VersionMessage versionMessage = new VersionMessage(UNITTEST, 2);
-        versionMessage.clientVersion = NetworkParameters.ProtocolVersion.BLOOM_FILTER.getBitcoinProtocolVersion();
+        versionMessage.clientVersion = ProtocolVersion.BLOOM_FILTER.intValue();
         versionMessage.localServices = Services.of(Services.NODE_NETWORK);
         InboundMessageQueuer p1 = connectPeer(1, versionMessage);
         Ping ping = (Ping) waitForOutbound(p1);
-        inbound(p1, new Pong(ping.getNonce()));
+        inbound(p1, ping.pong());
         pingAndWait(p1);
         assertTrue(peerGroup.getConnectedPeers().get(0).lastPingInterval().isPresent());
         // The call to outbound should block until a ping arrives.
         ping = (Ping) waitForOutbound(p1);
-        inbound(p1, new Pong(ping.getNonce()));
+        inbound(p1, ping.pong());
         assertTrue(peerGroup.getConnectedPeers().get(0).lastPingInterval().isPresent());
     }
 
@@ -486,10 +486,10 @@ public class PeerGroupTest extends TestWithPeerGroup {
     public void downloadPeerSelection() throws Exception {
         peerGroup.start();
         VersionMessage v1 = new VersionMessage(UNITTEST, 2);
-        v1.clientVersion = NetworkParameters.ProtocolVersion.WITNESS_VERSION.getBitcoinProtocolVersion();
+        v1.clientVersion = ProtocolVersion.WITNESS_VERSION.intValue();
         v1.localServices = Services.of(Services.NODE_NETWORK | Services.NODE_BLOOM | Services.NODE_WITNESS);
         VersionMessage v2 = new VersionMessage(UNITTEST, 4);
-        v2.clientVersion = NetworkParameters.ProtocolVersion.WITNESS_VERSION.getBitcoinProtocolVersion();
+        v2.clientVersion = ProtocolVersion.WITNESS_VERSION.intValue();
         v2.localServices = Services.of(Services.NODE_NETWORK | Services.NODE_BLOOM | Services.NODE_WITNESS);
         assertNull(peerGroup.getDownloadPeer());
 
@@ -705,8 +705,8 @@ public class PeerGroupTest extends TestWithPeerGroup {
 
     @Test
     public void waitForPeersOfVersion() throws Exception {
-        final int bip37ver = UNITTEST.getProtocolVersionNum(NetworkParameters.ProtocolVersion.BLOOM_FILTER);
-        final int bip111ver = UNITTEST.getProtocolVersionNum(NetworkParameters.ProtocolVersion.BLOOM_FILTER_BIP111);
+        final int bip37ver = ProtocolVersion.BLOOM_FILTER.intValue();
+        final int bip111ver = ProtocolVersion.BLOOM_FILTER_BIP111.intValue();
 
         CompletableFuture<List<Peer>> future = peerGroup.waitForPeersOfVersion(2, bip111ver);
 
@@ -798,7 +798,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         final int NUM_KEYS = 9;
 
         // First, grab a load of keys from the wallet, and then recreate it so it forgets that those keys were issued.
-        Wallet shadow = Wallet.fromSeed(wallet.getParams(), wallet.getKeyChainSeed(), ScriptType.P2PKH);
+        Wallet shadow = Wallet.fromSeed(wallet.network(), wallet.getKeyChainSeed(), ScriptType.P2PKH);
         List<ECKey> keys = new ArrayList<>(NUM_KEYS);
         for (int i = 0; i < NUM_KEYS; i++) {
             keys.add(shadow.freshReceiveKey());
@@ -819,7 +819,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         Block prev = blockStore.getChainHead().getHeader();
         for (ECKey key1 : keys) {
             Address addr = key1.toAddress(ScriptType.P2PKH, UNITTEST.network());
-            Block next = FakeTxBuilder.makeSolvedTestBlock(prev, FakeTxBuilder.createFakeTx(UNITTEST, Coin.FIFTY_COINS, addr));
+            Block next = FakeTxBuilder.makeSolvedTestBlock(prev, FakeTxBuilder.createFakeTx(UNITTEST.network(), Coin.FIFTY_COINS, addr));
             expectedBalance = expectedBalance.add(next.getTransactions().get(1).getOutput(0).getValue());
             blocks.add(next);
             prev = next;
@@ -828,7 +828,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         // Send the chain that doesn't have all the transactions in it. The blocks after the exhaustion point should all
         // be ignored.
         int epoch = wallet.getKeyChainGroupCombinedKeyLookaheadEpochs();
-        BloomFilter filter = new BloomFilter(ByteBuffer.wrap(p1.lastReceivedFilter.bitcoinSerialize()));
+        BloomFilter filter = BloomFilter.read(ByteBuffer.wrap(p1.lastReceivedFilter.serialize()));
         filterAndSend(p1, blocks, filter);
         Block exhaustionPoint = blocks.get(3);
         pingAndWait(p1);
@@ -844,7 +844,7 @@ public class PeerGroupTest extends TestWithPeerGroup {
         assertNotEquals(filter, newFilter);
         assertNextMessageIs(p1, MemoryPoolMessage.class);
         Ping ping = assertNextMessageIs(p1, Ping.class);
-        inbound(p1, new Pong(ping.getNonce()));
+        inbound(p1, ping.pong());
 
         // Await restart of the chain download.
         GetDataMessage getdata = assertNextMessageIs(p1, GetDataMessage.class);
@@ -858,12 +858,12 @@ public class PeerGroupTest extends TestWithPeerGroup {
         peerGroup.waitForJobQueue();
         newFilter = assertNextMessageIs(p1, BloomFilter.class);
         assertNextMessageIs(p1, MemoryPoolMessage.class);
-        inbound(p1, new Pong(assertNextMessageIs(p1, Ping.class).getNonce()));
+        inbound(p1, assertNextMessageIs(p1, Ping.class).pong());
         assertNextMessageIs(p1, GetDataMessage.class);
         newBlocks = blocks.subList(6, blocks.size());
         filterAndSend(p1, newBlocks, newFilter);
         // Send a non-tx message so the peer knows the filtered block is over and force processing.
-        inbound(p1, new Ping());
+        inbound(p1, Ping.random());
         pingAndWait(p1);
 
         assertEquals(expectedBalance, wallet.getBalance());

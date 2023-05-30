@@ -120,7 +120,7 @@ public class PaymentProtocolTest {
         final List<Output> parsedOutputs = parsedPaymentRequest.getOutputs();
         assertEquals(1, parsedOutputs.size());
         assertEquals(AMOUNT, parsedOutputs.get(0).amount);
-        assertArrayEquals(ScriptBuilder.createOutputScript(TO_ADDRESS).getProgram(), parsedOutputs.get(0).scriptData);
+        assertArrayEquals(ScriptBuilder.createOutputScript(TO_ADDRESS).program(), parsedOutputs.get(0).scriptData);
         assertEquals(MEMO, parsedPaymentRequest.getMemo());
         assertEquals(PAYMENT_URL, parsedPaymentRequest.getPaymentUrl());
         assertArrayEquals(MERCHANT_DATA, parsedPaymentRequest.getMerchantData());
@@ -130,7 +130,7 @@ public class PaymentProtocolTest {
     public void testPaymentMessage() throws Exception {
         // Create
         List<Transaction> transactions = new LinkedList<>();
-        transactions.add(FakeTxBuilder.createFakeTx(TESTNET, AMOUNT, TO_ADDRESS));
+        transactions.add(FakeTxBuilder.createFakeTx(TESTNET.network(), AMOUNT, TO_ADDRESS));
         Coin refundAmount = Coin.SATOSHI;
         Address refundAddress = new ECKey().toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
         Payment payment = PaymentProtocol.createPaymentMessage(transactions, refundAmount, refundAddress, MEMO,

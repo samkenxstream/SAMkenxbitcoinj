@@ -26,6 +26,7 @@ import org.bitcoinj.core.Block;
 import org.bitcoinj.base.Coin;
 import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.base.Sha256Hash;
+import org.bitcoinj.core.ProtocolVersion;
 import org.bitcoinj.core.StoredBlock;
 import org.bitcoinj.core.VerificationException;
 import org.bitcoinj.protocols.payments.PaymentProtocol;
@@ -89,8 +90,6 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
             return TestNet3Params.get();
         } else if (id.equals(BitcoinNetwork.ID_SIGNET)) {
             return SigNetParams.get();
-        } else if (id.equals(BitcoinNetwork.ID_UNITTESTNET)) {
-            return UnitTestParams.get();
         } else if (id.equals(BitcoinNetwork.ID_REGTEST)) {
             return RegTestParams.get();
         } else {
@@ -245,11 +244,6 @@ public abstract class BitcoinNetworkParams extends NetworkParameters {
     @Deprecated
     public MonetaryFormat getMonetaryFormat() {
         return new MonetaryFormat();
-    }
-
-    @Override
-    public int getProtocolVersionNum(final ProtocolVersion version) {
-        return version.getBitcoinProtocolVersion();
     }
 
     @Override

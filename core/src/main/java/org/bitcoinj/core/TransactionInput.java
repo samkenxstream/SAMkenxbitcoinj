@@ -130,6 +130,7 @@ public class TransactionInput {
 
     private TransactionInput(@Nullable Transaction parentTransaction, byte[] scriptBytes,
                             TransactionOutPoint outpoint, long sequence, @Nullable Coin value) {
+        checkArgument(value == null || value.signum() >= 0, () -> "value out of range: " + value);
         this.scriptBytes = scriptBytes;
         this.outpoint = outpoint;
         this.sequence = sequence;
@@ -224,7 +225,7 @@ public class TransactionInput {
         // parameter is overloaded to be something totally different.
         Script script = scriptSig == null ? null : scriptSig.get();
         if (script == null) {
-            script = new Script(scriptBytes);
+            script = Script.parse(scriptBytes);
             scriptSig = new WeakReference<>(script);
         }
         return script;
@@ -234,7 +235,7 @@ public class TransactionInput {
     public void setScriptSig(Script scriptSig) {
         this.scriptSig = new WeakReference<>(Objects.requireNonNull(scriptSig));
         // TODO: This should all be cleaned up so we have a consistent internal representation.
-        setScriptBytes(scriptSig.getProgram());
+        setScriptBytes(scriptSig.program());
     }
 
     /**
@@ -256,7 +257,6 @@ public class TransactionInput {
     public void setSequenceNumber(long sequence) {
         checkArgument(sequence >= 0 && sequence <= ByteUtils.MAX_UNSIGNED_INTEGER, () ->
                 "sequence out of range: " + sequence);
-        unCache();
         this.sequence = sequence;
     }
 
@@ -287,7 +287,6 @@ public class TransactionInput {
      * @param scriptBytes the scriptBytes to set
      */
     void setScriptBytes(byte[] scriptBytes) {
-        unCache();
         this.scriptSig = null;
         this.scriptBytes = scriptBytes;
     }
@@ -350,7 +349,7 @@ public class TransactionInput {
         Transaction tx = transactions.get(outpoint.hash());
         if (tx == null)
             return null;
-        return tx.getOutputs().get((int) outpoint.index());
+        return tx.getOutput(outpoint);
     }
 
     /**
@@ -397,10 +396,7 @@ public class TransactionInput {
     public ConnectionResult connect(Transaction transaction, ConnectMode mode) {
         if (!transaction.getTxId().equals(outpoint.hash()))
             return ConnectionResult.NO_SUCH_TX;
-        int outpointIndex = (int) outpoint.index();
-        checkArgument(outpointIndex >= 0 && outpointIndex < transaction.getOutputs().size(), () ->
-                "corrupt transaction: " + outpointIndex);
-        TransactionOutput out = transaction.getOutput(outpointIndex);
+        TransactionOutput out = transaction.getOutput(outpoint);
         if (!out.isAvailableForSpending()) {
             if (getParentTransaction().equals(outpoint.fromTx)) {
                 // Already connected.
@@ -408,7 +404,7 @@ public class TransactionInput {
             } else if (mode == ConnectMode.DISCONNECT_ON_CONFLICT) {
                 out.markAsUnspent();
             } else if (mode == ConnectMode.ABORT_ON_CONFLICT) {
-                outpoint.fromTx = out.getParentTransaction();
+                outpoint = outpoint.connectTransaction(out.getParentTransaction());
                 return TransactionInput.ConnectionResult.ALREADY_SPENT;
             }
         }
@@ -418,7 +414,7 @@ public class TransactionInput {
 
     /** Internal use only: connects this TransactionInput to the given output (updates pointers and spent flags) */
     public void connect(TransactionOutput out) {
-        outpoint.fromTx = out.getParentTransaction();
+        outpoint = outpoint.connectTransaction(out.getParentTransaction());
         out.markAsSpent(this);
         value = out.getValue();
     }
@@ -433,12 +429,12 @@ public class TransactionInput {
         TransactionOutput connectedOutput;
         if (outpoint.fromTx != null) {
             // The outpoint is connected using a "standard" wallet, disconnect it.
-            connectedOutput = outpoint.fromTx.getOutput((int) outpoint.index());
-            outpoint.fromTx = null;
+            connectedOutput = outpoint.fromTx.getOutput(outpoint);
+            outpoint = outpoint.disconnectTransaction();
         } else if (outpoint.connectedOutput != null) {
             // The outpoint is connected using a UTXO based wallet, disconnect it.
             connectedOutput = outpoint.connectedOutput;
-            outpoint.connectedOutput = null;
+            outpoint = outpoint.disconnectOutput();
         } else {
             // The outpoint is not connected, do nothing.
             return false;
@@ -483,9 +479,8 @@ public class TransactionInput {
      */
     public void verify() throws VerificationException {
         final Transaction fromTx = getOutpoint().fromTx;
-        long spendingIndex = getOutpoint().index();
         Objects.requireNonNull(fromTx, "Not connected");
-        final TransactionOutput output = fromTx.getOutput((int) spendingIndex);
+        final TransactionOutput output = fromTx.getOutput(outpoint);
         verify(output);
     }
 
@@ -541,21 +536,7 @@ public class TransactionInput {
     }
 
     protected final void setParent(@Nullable Transaction parent) {
-        if (this.parent != null && this.parent != parent && parent != null) {
-            // After old parent is unlinked it won't be able to receive notice if this child
-            // changes internally.  To be safe we invalidate the parent cache to ensure it rebuilds
-            // manually on serialization.
-            this.parent.unCache();
-        }
         this.parent = parent;
-    }
-
-    /* (non-Javadoc)
-     * @see Message#unCache()
-     */
-    protected void unCache() {
-        if (parent != null)
-            parent.unCache();
     }
 
     @Override

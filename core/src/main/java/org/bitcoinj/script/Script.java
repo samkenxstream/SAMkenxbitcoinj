@@ -221,140 +221,72 @@ public class Script {
     public static final int MAX_P2SH_SIGOPS = 15;
 
     // The program is a set of chunks where each element is either [opcode] or [data, data, data ...]
-    protected List<ScriptChunk> chunks;
+    private final List<ScriptChunk> chunks;
     // Unfortunately, scripts are not ever re-serialized or canonicalized when used in signature hashing. Thus we
     // must preserve the exact bytes that we read off the wire, along with the parsed form.
-    protected byte[] program;
+    private final byte[] program;
 
     // Creation time of the associated keys, or null if unknown.
-    @Nullable private Instant creationTime;
-
-    /** Creates an empty script that serializes to nothing. */
-    private Script() {
-        chunks = new ArrayList<>();
-    }
-
-    // Used from ScriptBuilder.
-    Script(List<ScriptChunk> chunks) {
-        this.chunks = Collections.unmodifiableList(new ArrayList<>(chunks));
-        creationTime = TimeUtils.currentTime();
-    }
+    @Nullable private final Instant creationTime;
 
     /**
-     * Construct a Script that copies and wraps the programBytes array. The array is parsed and checked for syntactic
-     * validity. Use this if the creation time is not known.
-     * @param programBytes Array of program bytes from a transaction.
-     */
-    public Script(byte[] programBytes) throws ScriptException {
-        this.program = programBytes;
-        parse(programBytes);
-        this.creationTime = null;
-    }
-
-    /**
-     * Construct a Script that copies and wraps the programBytes array. The array is parsed and checked for syntactic
-     * validity.
-     * @param programBytes Array of program bytes from a transaction.
-     * @param creationTime creation time of the script
-     */
-    public Script(byte[] programBytes, Instant creationTime) throws ScriptException {
-        this.program = programBytes;
-        parse(programBytes);
-        this.creationTime = Objects.requireNonNull(creationTime);
-    }
-
-    /**
-     * Gets the creation time of this script, or empty if unknown.
-     * @return creation time of this script, or empty if unknown
-     */
-    public Optional<Instant> creationTime() {
-        return Optional.ofNullable(creationTime);
-    }
-
-    /** @deprecated use {@link #creationTime()} */
-    @Deprecated
-    public long getCreationTimeSeconds() {
-        return creationTime().orElse(Instant.EPOCH).getEpochSecond();
-    }
-
-    /**
-     * Sets the creation time of this script.
-     * @param creationTime creation time of this script
-     */
-    public void setCreationTime(Instant creationTime) {
-        this.creationTime = Objects.requireNonNull(creationTime);
-    }
-
-    /**
-     * Clears the creation time of this script. This is mainly used deserialization and cloning. Normally you should not
-     * need to usethis, as keys should have proper creation times whenever possible.
-     */
-    public void clearCreationTime() {
-        this.creationTime = null;
-    }
-
-    /** @deprecated use {@link #setCreationTime(Instant)} */
-    @Deprecated
-    public void setCreationTimeSeconds(long creationTimeSecs) {
-        if (creationTimeSecs > 0)
-            setCreationTime(Instant.ofEpochSecond(creationTimeSecs));
-        else if (creationTimeSecs == 0)
-            clearCreationTime();
-        else
-            throw new IllegalArgumentException("Cannot set creation time to negative value: " + creationTimeSecs);
-    }
-
-    /**
-     * Returns the program opcodes as a string, for example "[1234] DUP HASH160", or "&lt;empty&gt;".
-     */
-    @Override
-    public String toString() {
-        if (!chunks.isEmpty())
-            return InternalUtils.SPACE_JOINER.join(chunks);
-        else
-            return "<empty>";
-    }
-
-    /** Returns the serialized program as a newly created byte array. */
-    public byte[] getProgram() {
-        try {
-            // Don't round-trip as Bitcoin Core doesn't and it would introduce a mismatch.
-            if (program != null)
-                return Arrays.copyOf(program, program.length);
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            for (ScriptChunk chunk : chunks) {
-                chunk.write(bos);
-            }
-            program = bos.toByteArray();
-            return program;
-        } catch (IOException e) {
-            throw new RuntimeException(e);  // Cannot happen.
-        }
-    }
-
-    /** Returns an immutable list of the scripts parsed form. Each chunk is either an opcode or data element. */
-    public List<ScriptChunk> getChunks() {
-        return Collections.unmodifiableList(chunks);
-    }
-
-    private static final ScriptChunk[] STANDARD_TRANSACTION_SCRIPT_CHUNKS = {
-        new ScriptChunk(ScriptOpCodes.OP_DUP, null),
-        new ScriptChunk(ScriptOpCodes.OP_HASH160, null),
-        new ScriptChunk(ScriptOpCodes.OP_EQUALVERIFY, null),
-        new ScriptChunk(ScriptOpCodes.OP_CHECKSIG, null),
-    };
-
-    /**
-     * <p>To run a script, first we parse it which breaks it up into chunks representing pushes of data or logical
-     * opcodes. Then we can run the parsed chunks.</p>
+     * Wraps given script chunks.
      *
-     * <p>The reason for this split, instead of just interpreting directly, is to make it easier
-     * to reach into a programs structure and pull out bits of data without having to run it.
-     * This is necessary to render the to addresses of transactions in a user interface.
-     * Bitcoin Core does something similar.</p>
+     * @param chunks chunks to wrap
+     * @return script that wraps the chunks
      */
-    private void parse(byte[] program) throws ScriptException {
-        chunks = new ArrayList<>(5);   // Common size.
+    public static Script of(List<ScriptChunk> chunks) {
+        return of(chunks, TimeUtils.currentTime());
+    }
+
+    /**
+     * Wraps given script chunks.
+     *
+     * @param chunks       chunks to wrap
+     * @param creationTime creation time of the script
+     * @return script that wraps the chunks
+     */
+    public static Script of(List<ScriptChunk> chunks, Instant creationTime) {
+        chunks = Collections.unmodifiableList(new ArrayList<>(chunks)); // defensive copy
+        Objects.requireNonNull(creationTime);
+        return new Script(null, chunks, creationTime);
+    }
+
+    /**
+     * Construct a script that copies and wraps a given program. The array is parsed and checked for syntactic
+     * validity. Programs like this are e.g. used in {@link TransactionInput} and {@link TransactionOutput}.
+     *
+     * @param program array of program bytes
+     * @return parsed program
+     * @throws ScriptException if the program could not be parsed
+     */
+    public static Script parse(byte[] program) throws ScriptException {
+        return parse(program, TimeUtils.currentTime());
+    }
+
+    /**
+     * Construct a script that copies and wraps a given program, and a creation time. The array is parsed and checked
+     * for syntactic validity. Programs like this are e.g. used in {@link TransactionInput} and
+     * {@link TransactionOutput}.
+     *
+     * @param program      Array of program bytes from a transaction.
+     * @param creationTime creation time of the script
+     * @return parsed program
+     * @throws ScriptException if the program could not be parsed
+     */
+    public static Script parse(byte[] program, Instant creationTime) throws ScriptException {
+        Objects.requireNonNull(creationTime);
+        program = Arrays.copyOf(program, program.length); // defensive copy
+        List<ScriptChunk> chunks = new ArrayList<>(5); // common size
+        parseIntoChunks(program, chunks);
+        return new Script(program, chunks, creationTime);
+    }
+
+    /**
+     * To run a script, first we parse it which breaks it up into chunks representing pushes of data or logical
+     * opcodes. Then we can run the parsed chunks.
+     */
+    private static void parseIntoChunks(byte[] program, List<ScriptChunk> chunks) throws ScriptException {
         ByteArrayInputStream bis = new ByteArrayInputStream(program);
         while (bis.available() > 0) {
             int opcode = bis.read();
@@ -394,6 +326,86 @@ public class Script {
             chunks.add(chunk);
         }
     }
+
+    private Script(byte[] programBytes, List<ScriptChunk> chunks, Instant creationTime) {
+        this.program = programBytes;
+        this.chunks = chunks;
+        this.creationTime = creationTime;
+    }
+
+    /**
+     * Gets the serialized program as a newly created byte array.
+     *
+     * @return serialized program
+     */
+    public byte[] program() {
+        if (program != null)
+            // Don't round-trip as Bitcoin Core doesn't and it would introduce a mismatch.
+            return Arrays.copyOf(program, program.length);
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            for (ScriptChunk chunk : chunks) {
+                chunk.write(bos);
+            }
+            return bos.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);  // Cannot happen.
+        }
+    }
+
+    /** @deprecated use {@link #program()} */
+    @Deprecated
+    public byte[] getProgram() {
+        return program();
+    }
+
+    /**
+     * Gets an immutable list of the scripts parsed form. Each chunk is either an opcode or data element.
+     *
+     * @return script chunks
+     */
+    public List<ScriptChunk> chunks() {
+        return Collections.unmodifiableList(chunks);
+    }
+
+    /** @deprecated use {@link #chunks()} */
+    @Deprecated
+    public List<ScriptChunk> getChunks() {
+        return chunks();
+    }
+
+    /**
+     * Gets the creation time of this script, or empty if unknown.
+     * @return creation time of this script, or empty if unknown
+     */
+    public Optional<Instant> creationTime() {
+        return Optional.ofNullable(creationTime);
+    }
+
+    /** @deprecated use {@link #creationTime()} */
+    @Deprecated
+    public long getCreationTimeSeconds() {
+        return creationTime().orElse(Instant.EPOCH).getEpochSecond();
+    }
+
+    /**
+     * Returns the program opcodes as a string, for example "[1234] DUP HASH160", or "&lt;empty&gt;".
+     */
+    @Override
+    public String toString() {
+        if (!chunks.isEmpty())
+            return InternalUtils.SPACE_JOINER.join(chunks);
+        else
+            return "<empty>";
+    }
+
+    private static final ScriptChunk[] STANDARD_TRANSACTION_SCRIPT_CHUNKS = {
+        new ScriptChunk(ScriptOpCodes.OP_DUP, null),
+        new ScriptChunk(ScriptOpCodes.OP_HASH160, null),
+        new ScriptChunk(ScriptOpCodes.OP_EQUALVERIFY, null),
+        new ScriptChunk(ScriptOpCodes.OP_CHECKSIG, null),
+    };
+
 
     /**
      * <p>If the program somehow pays to a hash, returns the hash.</p>
@@ -554,19 +566,6 @@ public class Script {
         }
     }
 
-    public TransactionWitness createEmptyWitness(ECKey key) {
-        if (ScriptPattern.isP2WPKH(this)) {
-            checkArgument(key != null, () ->
-                    "key required to create P2WPKH witness");
-            return TransactionWitness.EMPTY;
-        } else if (ScriptPattern.isP2PK(this) || ScriptPattern.isP2PKH(this)
-                || ScriptPattern.isP2SH(this)) {
-            return null; // no witness
-        } else {
-            throw new ScriptException(ScriptError.SCRIPT_ERR_UNKNOWN_ERROR, "Do not understand script type: " + this);
-        }
-    }
-
     /**
      * Returns a copy of the given scriptSig with the signature inserted in the given position.
      */
@@ -595,7 +594,7 @@ public class Script {
         List<ScriptChunk> existingChunks = chunks.subList(1, chunks.size() - 1);
         ScriptChunk redeemScriptChunk = chunks.get(chunks.size() - 1);
         Objects.requireNonNull(redeemScriptChunk.data);
-        Script redeemScript = new Script(redeemScriptChunk.data);
+        Script redeemScript = Script.parse(redeemScriptChunk.data);
 
         int sigCount = 0;
         int myIndex = redeemScript.findKeyInRedeem(signingKey);
@@ -713,31 +712,32 @@ public class Script {
      * Gets the count of regular SigOps in the script program (counting multisig ops as 20)
      */
     public static int getSigOpCount(byte[] program) throws ScriptException {
-        Script script = new Script();
+        List<ScriptChunk> chunks = new ArrayList<>(5); // common size
         try {
-            script.parse(program);
+            parseIntoChunks(program, chunks);
         } catch (ScriptException e) {
             // Ignore errors and count up to the parse-able length
         }
-        return getSigOpCount(script.chunks, false);
+        return getSigOpCount(chunks, false);
     }
-    
+
     /**
      * Gets the count of P2SH Sig Ops in the Script scriptSig
      */
     public static long getP2SHSigOpCount(byte[] scriptSig) throws ScriptException {
-        Script script = new Script();
+        List<ScriptChunk> chunks = new ArrayList<>(5); // common size
         try {
-            script.parse(scriptSig);
+            parseIntoChunks(scriptSig, chunks);
         } catch (ScriptException e) {
             // Ignore errors and count up to the parse-able length
         }
-        for (int i = script.chunks.size() - 1; i >= 0; i--)
-            if (!script.chunks.get(i).isOpCode()) {
-                Script subScript =  new Script();
-                subScript.parse(script.chunks.get(i).data);
+        Collections.reverse(chunks);
+        for (ScriptChunk chunk : chunks) {
+            if (!chunk.isOpCode()) {
+                Script subScript = parse(chunk.data);
                 return getSigOpCount(subScript.chunks, true);
             }
+        }
         return 0;
     }
 
@@ -768,7 +768,7 @@ public class Script {
             // scriptSig: <sig> [sig] [sig...] <redeemscript>
             checkArgument(redeemScript != null, () ->
                     "P2SH script requires redeemScript to be spent");
-            return redeemScript.getNumberOfSignaturesRequiredToSpend() * SIG_SIZE + redeemScript.getProgram().length;
+            return redeemScript.getNumberOfSignaturesRequiredToSpend() * SIG_SIZE + redeemScript.program().length;
         } else if (ScriptPattern.isSentToMultisig(this)) {
             // scriptSig: OP_0 <sig> [sig] [sig...]
             return getNumberOfSignaturesRequiredToSpend() * SIG_SIZE + 1;
@@ -1540,7 +1540,7 @@ public class Script {
         byte[] pubKey = stack.pollLast();
         byte[] sigBytes = stack.pollLast();
 
-        byte[] prog = script.getProgram();
+        byte[] prog = script.program();
         byte[] connectedScript = Arrays.copyOfRange(prog, lastCodeSepLocation, prog.length);
 
         ByteArrayOutputStream outStream = new ByteArrayOutputStream(sigBytes.length + 1);
@@ -1616,7 +1616,7 @@ public class Script {
             sigs.add(sig);
         }
 
-        byte[] prog = script.getProgram();
+        byte[] prog = script.program();
         byte[] connectedScript = Arrays.copyOfRange(prog, lastCodeSepLocation, prog.length);
 
         for (byte[] sig : sigs) {
@@ -1744,11 +1744,11 @@ public class Script {
         // Clone the transaction because executing the script involves editing it, and if we die, we'll leave
         // the tx half broken (also it's not so thread safe to work on it directly.
         try {
-            txContainingThis = new Transaction(ByteBuffer.wrap(txContainingThis.bitcoinSerialize()));
+            txContainingThis = Transaction.read(ByteBuffer.wrap(txContainingThis.serialize()));
         } catch (ProtocolException e) {
             throw new RuntimeException(e);   // Should not happen unless we were given a totally broken transaction.
         }
-        if (getProgram().length > MAX_SCRIPT_SIZE || scriptPubKey.getProgram().length > MAX_SCRIPT_SIZE)
+        if (program().length > MAX_SCRIPT_SIZE || scriptPubKey.program().length > MAX_SCRIPT_SIZE)
             throw new ScriptException(ScriptError.SCRIPT_ERR_SCRIPT_SIZE, "Script larger than 10,000 bytes");
         
         LinkedList<byte[]> stack = new LinkedList<>();
@@ -1786,7 +1786,7 @@ public class Script {
                     throw new ScriptException(ScriptError.SCRIPT_ERR_SIG_PUSHONLY, "Attempted to spend a P2SH scriptPubKey with a script that contained the script op " + chunk);
             
             byte[] scriptPubKeyBytes = p2shStack.pollLast();
-            Script scriptPubKeyP2SH = new Script(scriptPubKeyBytes);
+            Script scriptPubKeyP2SH = Script.parse(scriptPubKeyBytes);
             
             executeScript(txContainingThis, scriptSigIndex, scriptPubKeyP2SH, p2shStack, verifyFlags);
             
@@ -1804,7 +1804,7 @@ public class Script {
     private byte[] getQuickProgram() {
         if (program != null)
             return program;
-        return getProgram();
+        return program();
     }
 
     /**

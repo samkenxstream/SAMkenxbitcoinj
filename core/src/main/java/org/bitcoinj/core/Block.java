@@ -55,6 +55,7 @@ import java.util.Locale;
 
 import static org.bitcoinj.base.Coin.FIFTY_COINS;
 import static org.bitcoinj.base.Sha256Hash.hashTwice;
+import static org.bitcoinj.base.internal.Preconditions.check;
 import static org.bitcoinj.base.internal.Preconditions.checkState;
 
 /**
@@ -69,7 +70,7 @@ import static org.bitcoinj.base.internal.Preconditions.checkState;
  * 
  * <p>Instances of this class are not safe for use by multiple threads.</p>
  */
-public class Block extends Message {
+public class Block extends BaseMessage {
     /**
      * Flags used to control which elements of block validation are done on
      * received blocks.
@@ -133,23 +134,58 @@ public class Block extends Message {
     /** Stores the hash of the block. If null, getHash() will recalculate it. */
     private Sha256Hash hash;
 
+    /**
+     * Deserialize this message from a given payload.
+     *
+     * @param payload payload to deserialize from
+     * @return read message
+     * @throws BufferUnderflowException if the read message extends beyond the remaining bytes of the payload
+     */
+    public static Block read(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        // header
+        payload.mark();
+        long version = ByteUtils.readUint32(payload);
+        Sha256Hash prevBlockHash = Sha256Hash.read(payload);
+        Sha256Hash merkleRoot = Sha256Hash.read(payload);
+        Instant time = Instant.ofEpochSecond(ByteUtils.readUint32(payload));
+        long difficultyTarget = ByteUtils.readUint32(payload);
+        long nonce = ByteUtils.readUint32(payload);
+        payload.reset(); // read again from the mark for the hash
+        Sha256Hash hash = Sha256Hash.wrapReversed(Sha256Hash.hashTwice(Buffers.readBytes(payload, HEADER_SIZE)));
+        // transactions
+        List<Transaction> transactions = payload.hasRemaining() ? // otherwise this message is just a header
+                readTransactions(payload) :
+                null;
+        Block block = new Block(version, prevBlockHash, merkleRoot, time, difficultyTarget, nonce, transactions);
+        block.hash = hash;
+        return block;
+    }
+
+    /**
+     * Parse transactions from the block.
+     */
+    private static List<Transaction> readTransactions(ByteBuffer payload) throws BufferUnderflowException,
+            ProtocolException {
+        VarInt numTransactionsVarInt = VarInt.read(payload);
+        check(numTransactionsVarInt.fitsInt(), BufferUnderflowException::new);
+        int numTransactions = numTransactionsVarInt.intValue();
+        List<Transaction> transactions = new ArrayList<>(Math.min(numTransactions, Utils.MAX_INITIAL_ARRAY_LENGTH));
+        for (int i = 0; i < numTransactions; i++) {
+            Transaction tx = Transaction.read(payload);
+            // Label the transaction as coming from the P2P network, so code that cares where we first saw it knows.
+            tx.getConfidence().setSource(TransactionConfidence.Source.NETWORK);
+            transactions.add(tx);
+        }
+        return transactions;
+    }
+
     /** Special case constructor, used for the genesis node, cloneAsHeader and unit tests. */
     Block(long setVersion) {
-        super(new DummySerializer(NetworkParameters.ProtocolVersion.CURRENT.getBitcoinProtocolVersion()));
         // Set up a few basic things. We are not complete after this though.
         version = setVersion;
         difficultyTarget = 0x1d07fff8L;
         time = TimeUtils.currentTime().truncatedTo(ChronoUnit.SECONDS); // convert to Bitcoin time
         prevBlockHash = Sha256Hash.ZERO_HASH;
-    }
-
-    /**
-     * Construct a block object from the Bitcoin wire format.
-     * @param payload the payload to extract the block from.
-     * @throws ProtocolException
-     */
-    public Block(ByteBuffer payload) throws ProtocolException {
-        super(payload, new DummySerializer(NetworkParameters.ProtocolVersion.CURRENT.getBitcoinProtocolVersion()));
     }
 
     /**
@@ -171,8 +207,9 @@ public class Block extends Message {
         this.time = time;
         this.difficultyTarget = difficultyTarget;
         this.nonce = nonce;
-        this.transactions = new LinkedList<>();
-        this.transactions.addAll(transactions);
+        if (transactions != null)
+            transactions = new LinkedList<>(transactions);
+        this.transactions = transactions;
     }
 
     /**
@@ -191,39 +228,6 @@ public class Block extends Message {
                  long difficultyTarget, long nonce, List<Transaction> transactions) {
         this(version, prevBlockHash, merkleRoot, Instant.ofEpochSecond(time), difficultyTarget, nonce,
                 transactions);
-    }
-
-    /**
-     * Parse transactions from the block.
-     */
-    protected void parseTransactions(ByteBuffer payload) throws ProtocolException {
-        VarInt numTransactionsVarInt = VarInt.read(payload);
-        int numTransactions = numTransactionsVarInt.intValue();
-        transactions = new ArrayList<>(Math.min(numTransactions, Utils.MAX_INITIAL_ARRAY_LENGTH));
-        for (int i = 0; i < numTransactions; i++) {
-            Transaction tx = new Transaction(payload, serializer, null);
-            // Label the transaction as coming from the P2P network, so code that cares where we first saw it knows.
-            tx.getConfidence().setSource(TransactionConfidence.Source.NETWORK);
-            transactions.add(tx);
-        }
-    }
-
-    @Override
-    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
-        // header
-        payload.mark();
-        version = ByteUtils.readUint32(payload);
-        prevBlockHash = Sha256Hash.read(payload);
-        merkleRoot = Sha256Hash.read(payload);
-        time = Instant.ofEpochSecond(ByteUtils.readUint32(payload));
-        difficultyTarget = ByteUtils.readUint32(payload);
-        nonce = ByteUtils.readUint32(payload);
-        payload.reset(); // read again from the mark for the hash
-        hash = Sha256Hash.wrapReversed(Sha256Hash.hashTwice(Buffers.readBytes(payload, HEADER_SIZE)));
-
-        // transactions
-        if (payload.hasRemaining()) // otherwise this message is just a header
-            parseTransactions(payload);
     }
 
     public static Block createGenesis() {
@@ -254,13 +258,13 @@ public class Block extends Message {
     }
 
     @Override
-    public int getMessageSize() {
+    public int messageSize() {
         int size = HEADER_SIZE;
         List<Transaction> transactions = getTransactions();
         if (transactions != null) {
             size += VarInt.sizeOf(transactions.size());
             for (Transaction tx : transactions) {
-                size += tx.getMessageSize();
+                size += tx.messageSize();
             }
         }
         return size;
@@ -810,9 +814,9 @@ public class Block extends Message {
         // Here we will do things a bit differently so a new address isn't needed every time. We'll put a simple
         // counter in the scriptSig so every transaction has a different hash.
         coinbase.addInput(TransactionInput.coinbaseInput(coinbase,
-                inputBuilder.build().getProgram()));
+                inputBuilder.build().program()));
         coinbase.addOutput(new TransactionOutput(coinbase, value,
-                ScriptBuilder.createP2PKOutputScript(ECKey.fromPublicOnly(pubKeyTo)).getProgram()));
+                ScriptBuilder.createP2PKOutputScript(ECKey.fromPublicOnly(pubKeyTo)).program()));
         transactions.add(coinbase);
     }
 
@@ -1051,12 +1055,12 @@ public class Block extends Message {
         // transactions that reference spent or non-existent inputs.
         if (block.transactions.isEmpty())
             throw new VerificationException("Block had no transactions");
-        if (block.getMessageSize() > MAX_BLOCK_SIZE)
+        if (block.messageSize() > MAX_BLOCK_SIZE)
             throw new VerificationException("Block larger than MAX_BLOCK_SIZE");
         block.checkTransactions(height, flags);
         block.checkMerkleRoot();
         block.checkSigOps();
         for (Transaction tx : block.transactions)
-            Transaction.verify(params, tx);
+            Transaction.verify(params.network(), tx);
     }
 }

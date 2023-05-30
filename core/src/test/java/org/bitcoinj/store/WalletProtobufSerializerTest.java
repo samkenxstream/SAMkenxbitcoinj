@@ -49,7 +49,6 @@ import org.bitcoinj.utils.Threading;
 import org.bitcoinj.wallet.DeterministicKeyChain;
 import org.bitcoinj.wallet.KeyChain;
 import org.bitcoinj.wallet.KeyChainGroup;
-import org.bitcoinj.wallet.MarriedKeyChain;
 import org.bitcoinj.wallet.Protos;
 import org.bitcoinj.wallet.UnreadableWalletException;
 import org.bitcoinj.wallet.Wallet;
@@ -109,7 +108,7 @@ public class WalletProtobufSerializerTest {
         myKey = new ECKey();
         myKey.setCreationTime(Instant.ofEpochSecond(123456789L));
         myAddress = myKey.toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
-        myWallet = new Wallet(TESTNET, KeyChainGroup.builder(TESTNET).fromRandom(ScriptType.P2PKH).build());
+        myWallet = new Wallet(BitcoinNetwork.TESTNET, KeyChainGroup.builder(BitcoinNetwork.TESTNET).fromRandom(ScriptType.P2PKH).build());
         myWallet.importKey(myKey);
         mScriptCreationTime = TimeUtils.currentTime().minusSeconds(1234);
         myWallet.addWatchedAddress(myWatchedKey.toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET), mScriptCreationTime);
@@ -138,16 +137,16 @@ public class WalletProtobufSerializerTest {
     public void oneTx() throws Exception {
         // Check basic tx serialization.
         Coin v1 = COIN;
-        Transaction t1 = createFakeTx(TESTNET, v1, myAddress);
-        t1.getConfidence().markBroadcastBy(new PeerAddress(InetAddress.getByName("1.2.3.4"), TESTNET.getPort()));
-        t1.getConfidence().markBroadcastBy(new PeerAddress(InetAddress.getByName("5.6.7.8"), TESTNET.getPort()));
+        Transaction t1 = createFakeTx(TESTNET.network(), v1, myAddress);
+        t1.getConfidence().markBroadcastBy(PeerAddress.simple(InetAddress.getByName("1.2.3.4"), TESTNET.getPort()));
+        t1.getConfidence().markBroadcastBy(PeerAddress.simple(InetAddress.getByName("5.6.7.8"), TESTNET.getPort()));
         t1.getConfidence().setSource(TransactionConfidence.Source.NETWORK);
         myWallet.receivePending(t1, null);
         Wallet wallet1 = roundTrip(myWallet);
         assertEquals(1, wallet1.getTransactions(true).size());
         assertEquals(v1, wallet1.getBalance(Wallet.BalanceType.ESTIMATED));
         Transaction t1copy = wallet1.getTransaction(t1.getTxId());
-        assertArrayEquals(t1.bitcoinSerialize(), t1copy.bitcoinSerialize());
+        assertArrayEquals(t1.serialize(), t1copy.serialize());
         assertEquals(2, t1copy.getConfidence().numBroadcastPeers());
         assertNotNull(t1copy.getConfidence().lastBroadcastTime());
         assertEquals(TransactionConfidence.Source.NETWORK, t1copy.getConfidence().getSource());
@@ -164,7 +163,7 @@ public class WalletProtobufSerializerTest {
         assertEquals(Protos.Transaction.Pool.PENDING, t1p.getPool());
         assertFalse(t1p.hasLockTime());
         assertFalse(t1p.getTransactionInput(0).hasSequence());
-        assertArrayEquals(t1.getInputs().get(0).getOutpoint().hash().getBytes(),
+        assertArrayEquals(t1.getInput(0).getOutpoint().hash().getBytes(),
                 t1p.getTransactionInput(0).getTransactionOutPointHash().toByteArray());
         assertEquals(0, t1p.getTransactionInput(0).getTransactionOutPointIndex());
         assertEquals(t1p.getTransactionOutput(0).getValue(), v1.value);
@@ -174,7 +173,7 @@ public class WalletProtobufSerializerTest {
     public void raiseFeeTx() throws Exception {
         // Check basic tx serialization.
         Coin v1 = COIN;
-        Transaction t1 = createFakeTx(TESTNET, v1, myAddress);
+        Transaction t1 = createFakeTx(TESTNET.network(), v1, myAddress);
         t1.setPurpose(Purpose.RAISE_FEE);
         myWallet.receivePending(t1, null);
         Wallet wallet1 = roundTrip(myWallet);
@@ -205,7 +204,7 @@ public class WalletProtobufSerializerTest {
         for (int i = 0 ; i < 20 ; i++) {
             myKey = new ECKey();
             myAddress = myKey.toAddress(ScriptType.P2PKH, BitcoinNetwork.TESTNET);
-            myWallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH);
+            myWallet = Wallet.createDeterministic(BitcoinNetwork.TESTNET, ScriptType.P2PKH);
             myWallet.importKey(myKey);
             Wallet wallet1 = roundTrip(myWallet);
             ECKey foundKey = wallet1.findKeyFromPubKeyHash(myKey.getPubKeyHash(), null);
@@ -219,7 +218,7 @@ public class WalletProtobufSerializerTest {
         // Test the lastBlockSeenHash field works.
 
         // LastBlockSeenHash should be empty if never set.
-        Wallet wallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH);
+        Wallet wallet = Wallet.createDeterministic(BitcoinNetwork.TESTNET, ScriptType.P2PKH);
         Protos.Wallet walletProto = new WalletProtobufSerializer().walletToProto(wallet);
         ByteString lastSeenBlockHash = walletProto.getLastSeenBlockHash();
         assertTrue(lastSeenBlockHash.isEmpty());
@@ -245,11 +244,11 @@ public class WalletProtobufSerializerTest {
 
     @Test
     public void testSequenceNumber() throws Exception {
-        Wallet wallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH);
-        Transaction tx1 = createFakeTx(TESTNET, Coin.COIN, wallet.currentReceiveAddress());
+        Wallet wallet = Wallet.createDeterministic(BitcoinNetwork.TESTNET, ScriptType.P2PKH);
+        Transaction tx1 = createFakeTx(TESTNET.network(), Coin.COIN, wallet.currentReceiveAddress());
         tx1.getInput(0).setSequenceNumber(TransactionInput.NO_SEQUENCE);
         wallet.receivePending(tx1, null);
-        Transaction tx2 = createFakeTx(TESTNET, Coin.COIN, wallet.currentReceiveAddress());
+        Transaction tx2 = createFakeTx(TESTNET.network(), Coin.COIN, wallet.currentReceiveAddress());
         tx2.getInput(0).setSequenceNumber(TransactionInput.NO_SEQUENCE - 1);
         wallet.receivePending(tx2, null);
         Wallet walletCopy = roundTrip(wallet);
@@ -350,7 +349,7 @@ public class WalletProtobufSerializerTest {
     public void testRoundTripWatchingWallet() throws Exception {
         final String xpub = "tpubD9LrDvFDrB6wYNhbR2XcRRaT4yCa37TjBR3YthBQvrtEwEq6CKeEXUs3TppQd38rfxmxD1qLkC99iP3vKcKwLESSSYdFAftbrpuhSnsw6XM";
         final Instant creationTime = Instant.ofEpochSecond(1457019819);
-        Wallet wallet = Wallet.fromWatchingKeyB58(TESTNET, xpub, creationTime);
+        Wallet wallet = Wallet.fromWatchingKeyB58(BitcoinNetwork.TESTNET, xpub, creationTime);
         Wallet wallet2 = roundTrip(wallet);
         Wallet wallet3 = roundTrip(wallet2);
         assertEquals(xpub, wallet.getWatchingKey().serializePubB58(TESTNET.network()));
@@ -363,29 +362,8 @@ public class WalletProtobufSerializerTest {
     }
 
     @Test
-    public void testRoundTripMarriedWallet() throws Exception {
-        // create 2-of-2 married wallet
-        myWallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH);
-        final DeterministicKeyChain partnerChain = DeterministicKeyChain.builder().random(new SecureRandom()).build();
-        DeterministicKey partnerKey = DeterministicKey.deserializeB58(null, partnerChain.getWatchingKey().serializePubB58(TESTNET.network()), TESTNET.network());
-        MarriedKeyChain chain = MarriedKeyChain.builder()
-                .random(new SecureRandom())
-                .followingKey(partnerKey)
-                .threshold(2).build();
-        myWallet.addAndActivateHDChain(chain);
-
-        myAddress = myWallet.currentAddress(KeyChain.KeyPurpose.RECEIVE_FUNDS);
-
-        Wallet wallet1 = roundTrip(myWallet);
-        assertEquals(0, wallet1.getTransactions(true).size());
-        assertEquals(Coin.ZERO, wallet1.getBalance());
-        assertEquals(2, wallet1.getActiveKeyChain().getSigsRequiredToSpend());
-        assertEquals(myAddress, wallet1.currentAddress(KeyChain.KeyPurpose.RECEIVE_FUNDS));
-    }
-
-    @Test
     public void roundtripVersionTwoTransaction() throws Exception {
-        Transaction tx = new Transaction(ByteBuffer.wrap(ByteUtils.parseHex(
+        Transaction tx = Transaction.read(ByteBuffer.wrap(ByteUtils.parseHex(
                 "0200000001d7902864af9310420c6e606b814c8f89f7902d40c130594e85df2e757a7cc301070000006b483045022100ca1757afa1af85c2bb014382d9ce411e1628d2b3d478df9d5d3e9e93cb25dcdd02206c5d272b31a23baf64e82793ee5c816e2bbef251e733a638b630ff2331fc83ba0121026ac2316508287761befbd0f7495ea794b396dbc5b556bf276639f56c0bd08911feffffff0274730700000000001976a91456da2d038a098c42390c77ef163e1cc23aedf24088ac91062300000000001976a9148ebf3467b9a8d7ae7b290da719e61142793392c188ac22e00600")));
         assertEquals(tx.getVersion(), 2);
         assertEquals(tx.getTxId().toString(), "0321b1413ed9048199815bd6bc2650cab1a9e8d543f109a42c769b1f18df4174");
@@ -426,21 +404,21 @@ public class WalletProtobufSerializerTest {
         Protos.Wallet proto = new WalletProtobufSerializer().walletToProto(myWallet);
         // Initial extension is mandatory: try to read it back into a wallet that doesn't know about it.
         try {
-            new WalletProtobufSerializer().readWallet(TESTNET, null, proto);
+            new WalletProtobufSerializer().readWallet(BitcoinNetwork.TESTNET, null, proto);
             fail();
         } catch (UnreadableWalletException e) {
             assertTrue(e.getMessage().contains("mandatory"));
         }
-        Wallet wallet = new WalletProtobufSerializer().readWallet(TESTNET,
+        Wallet wallet = new WalletProtobufSerializer().readWallet(BitcoinNetwork.TESTNET,
                 new WalletExtension[]{ new FooWalletExtension("com.whatever.required", true) },
                 proto);
         assertTrue(wallet.getExtensions().containsKey("com.whatever.required"));
 
         // Non-mandatory extensions are ignored if the wallet doesn't know how to read them.
-        Wallet wallet2 = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH);
+        Wallet wallet2 = Wallet.createDeterministic(BitcoinNetwork.TESTNET, ScriptType.P2PKH);
         wallet2.addExtension(new FooWalletExtension("com.whatever.optional", false));
         Protos.Wallet proto2 = new WalletProtobufSerializer().walletToProto(wallet2);
-        Wallet wallet5 = new WalletProtobufSerializer().readWallet(TESTNET, null, proto2);
+        Wallet wallet5 = new WalletProtobufSerializer().readWallet(BitcoinNetwork.TESTNET, null, proto2);
         assertEquals(0, wallet5.getExtensions().size());
     }
 
@@ -469,7 +447,7 @@ public class WalletProtobufSerializerTest {
         };
         myWallet.addExtension(extension);
         Protos.Wallet proto = new WalletProtobufSerializer().walletToProto(myWallet);
-        Wallet wallet = new WalletProtobufSerializer().readWallet(TESTNET, new WalletExtension[]{extension}, proto);
+        Wallet wallet = new WalletProtobufSerializer().readWallet(BitcoinNetwork.TESTNET, new WalletExtension[]{extension}, proto);
         assertEquals(0, wallet.getExtensions().size());
     }
 
@@ -477,13 +455,13 @@ public class WalletProtobufSerializerTest {
     public void versions() throws Exception {
         Protos.Wallet.Builder proto = Protos.Wallet.newBuilder(new WalletProtobufSerializer().walletToProto(myWallet));
         proto.setVersion(2);
-        new WalletProtobufSerializer().readWallet(TESTNET, null, proto.build());
+        new WalletProtobufSerializer().readWallet(BitcoinNetwork.TESTNET, null, proto.build());
     }
 
     @Test
     public void storeWitnessTransactions() throws Exception {
         // 3 inputs, inputs 0 and 2 have witnesses but not input 1
-        Transaction tx = new Transaction(ByteBuffer.wrap(ByteUtils.parseHex(
+        Transaction tx = Transaction.read(ByteBuffer.wrap(ByteUtils.parseHex(
                 "02000000000103fc8a5bea59392369e8a1b635395e507a5cbaeffd926e6967a00d17c669aef1d3010000001716001403c80a334ed6a92cf400d8c708522ea0d6fa5593ffffffffc0166d2218a2613b5384fc2c31238b1b6fa337080a1384220734e1bfd3629d3f0100000000ffffffffc0166d2218a2613b5384fc2c31238b1b6fa337080a1384220734e1bfd3629d3f0200000000ffffffff01a086010000000000220020eb72e573a9513d982a01f0e6a6b53e92764db81a0c26d2be94c5fc5b69a0db7d02473044022048e895b7af715303ce273a2be03d6110ed69b5700679f4f036000f8ba6eddd2802205f780423fcce9b3632ed41681b0a86f5d123766b71f303558c39c1be5fe43e2601210259eb16169df80dbe5856d082a226d84a97d191c895f8046c3544df525028a874000220c0166d2218a2613b5384fc2c31238b1b6fa337080a1384220734e1bfd3629d3f20c0166d2218a2613b5384fc2c31238b1b6fa337080a1384220734e1bfd3629d3f00000000")));
         assertTrue(tx.hasWitnesses());
         assertEquals(tx.getTxId().toString(), "1c687396f4710f26206dbdd8bf07a28c76398be6750226ddfaf05a1a80d30034");

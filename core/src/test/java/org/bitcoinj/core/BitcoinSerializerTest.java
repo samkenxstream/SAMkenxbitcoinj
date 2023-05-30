@@ -19,15 +19,19 @@ package org.bitcoinj.core;
 
 import com.google.common.io.BaseEncoding;
 import org.bitcoinj.base.internal.ByteUtils;
+import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.params.MainNetParams;
 import org.bitcoinj.params.TestNet3Params;
 import org.junit.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.math.BigInteger;
 import java.net.InetAddress;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -73,18 +77,18 @@ public class BitcoinSerializerTest {
         assertEquals("10.0.0.1", peerAddress.getAddr().getHostAddress());
         ByteArrayOutputStream bos = new ByteArrayOutputStream(ADDRESS_MESSAGE_BYTES.length);
         serializer.serialize(addressMessage, bos);
-        assertEquals(31, addressMessage.getMessageSize());
+        assertEquals(31, addressMessage.messageSize());
 
-        addressMessage.addAddress(new PeerAddress(InetAddress.getLocalHost(), MAINNET.getPort(),
-                Services.none(), new DummySerializer(1)));
+        addressMessage.addAddress(PeerAddress.inet(InetAddress.getLocalHost(), MAINNET.getPort(),
+                Services.none(), TimeUtils.currentTime().truncatedTo(ChronoUnit.SECONDS)));
         bos = new ByteArrayOutputStream(61);
         serializer.serialize(addressMessage, bos);
-        assertEquals(61, addressMessage.getMessageSize());
+        assertEquals(61, addressMessage.messageSize());
 
         addressMessage.removeAddress(0);
         bos = new ByteArrayOutputStream(31);
         serializer.serialize(addressMessage, bos);
-        assertEquals(31, addressMessage.getMessageSize());
+        assertEquals(31, addressMessage.messageSize());
 
         //this wont be true due to dynamic timestamps.
         //assertTrue(LazyParseByteCacheTest.arrayContains(bos.toByteArray(), addrMessage));
@@ -110,7 +114,7 @@ public class BitcoinSerializerTest {
         transaction = (Transaction) serializer.deserialize(ByteBuffer.wrap(TRANSACTION_MESSAGE_BYTES));
         assertNotNull(transaction);
 
-        transaction.getInputs().get(0).setSequenceNumber(1);
+        transaction.getInput(0).setSequenceNumber(1);
 
         bos = new ByteArrayOutputStream();
         serializer.serialize(transaction, bos);
@@ -127,7 +131,7 @@ public class BitcoinSerializerTest {
         transaction = (Transaction) serializer.deserialize(ByteBuffer.wrap(TRANSACTION_MESSAGE_BYTES));
         assertNotNull(transaction);
 
-        transaction.getInputs().get(0).setSequenceNumber(transaction.getInputs().get(0).getSequenceNumber());
+        transaction.getInput(0).setSequenceNumber(transaction.getInputs().get(0).getSequenceNumber());
 
         bos = new ByteArrayOutputStream();
         serializer.serialize(transaction, bos);
@@ -231,10 +235,9 @@ public class BitcoinSerializerTest {
     public void testSerializeUnknownMessage() throws Exception {
         MessageSerializer serializer = MAINNET.getDefaultSerializer();
 
-        Message unknownMessage = new Message() {
+        Message unknownMessage = new BaseMessage() {
             @Override
-            protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
-            }
+            protected void bitcoinSerializeToStream(OutputStream stream) {}
         };
         ByteArrayOutputStream bos = new ByteArrayOutputStream(ADDRESS_MESSAGE_BYTES.length);
         serializer.serialize(unknownMessage, bos);

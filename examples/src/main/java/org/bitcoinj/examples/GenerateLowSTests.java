@@ -30,7 +30,6 @@ import org.bitcoinj.base.ScriptType;
 import org.bitcoinj.base.internal.ByteUtils;
 import org.bitcoinj.base.Coin;
 import org.bitcoinj.crypto.ECKey;
-import org.bitcoinj.core.NetworkParameters;
 import org.bitcoinj.crypto.SignatureDecodeException;
 import org.bitcoinj.core.Transaction;
 import org.bitcoinj.core.TransactionInput;
@@ -60,7 +59,6 @@ public class GenerateLowSTests {
     public static void main(final String[] argv)
             throws NoSuchAlgorithmException, IOException, VerificationException, SignatureDecodeException {
         final Network network = BitcoinNetwork.MAINNET;
-        final NetworkParameters params = NetworkParameters.of(network);
         final LocalTransactionSigner signer = new LocalTransactionSigner();
         final SecureRandom secureRandom = SecureRandom.getInstanceStrong();
         final ECKey key = new ECKey(secureRandom);
@@ -105,7 +103,7 @@ public class GenerateLowSTests {
             EnumSet.of(Script.VerifyFlag.DERSIG, Script.VerifyFlag.P2SH));
 
         final Script scriptSig = input.getScriptSig();
-        final TransactionSignature signature = TransactionSignature.decodeFromBitcoin(scriptSig.getChunks().get(0).data, true, false);
+        final TransactionSignature signature = TransactionSignature.decodeFromBitcoin(scriptSig.chunks().get(0).data, true, false);
 
         // First output a conventional low-S transaction with the LOW_S flag, for the tx_valid.json set
         System.out.println("[\"A transaction with a low-S signature.\"],");
@@ -113,12 +111,12 @@ public class GenerateLowSTests {
             + inputTransaction.getTxId() + "\", "
             + output.getIndex() + ", \""
             + scriptToString(output.getScriptPubKey()) + "\"]],\n"
-            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.bitcoinSerialize()) + "\", \""
+            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.serialize()) + "\", \""
             + Script.VerifyFlag.P2SH.name() + "," + Script.VerifyFlag.LOW_S.name() + "\"],");
 
         final BigInteger highS = HIGH_S_DIFFERENCE.subtract(signature.s);
         final TransactionSignature highSig = new TransactionSignature(signature.r, highS);
-        input.setScriptSig(new ScriptBuilder().data(highSig.encodeToBitcoin()).data(scriptSig.getChunks().get(1).data).build());
+        input.setScriptSig(new ScriptBuilder().data(highSig.encodeToBitcoin()).data(scriptSig.chunks().get(1).data).build());
         input.getScriptSig().correctlySpends(outputTransaction, 0, null, null, output.getScriptPubKey(),
             EnumSet.of(Script.VerifyFlag.P2SH));
 
@@ -128,7 +126,7 @@ public class GenerateLowSTests {
             + inputTransaction.getTxId() + "\", "
             + output.getIndex() + ", \""
             + scriptToString(output.getScriptPubKey()) + "\"]],\n"
-            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.bitcoinSerialize()) + "\", \""
+            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.serialize()) + "\", \""
             + Script.VerifyFlag.P2SH.name() + "\"],");
 
         // Lastly a conventional high-S transaction with the LOW_S flag, for the tx_invalid.json set
@@ -137,7 +135,7 @@ public class GenerateLowSTests {
             + inputTransaction.getTxId() + "\", "
             + output.getIndex() + ", \""
             + scriptToString(output.getScriptPubKey()) + "\"]],\n"
-            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.bitcoinSerialize()) + "\", \""
+            + "\"" + ByteUtils.formatHex(proposedTransaction.partialTx.serialize()) + "\", \""
             + Script.VerifyFlag.P2SH.name() + "," + Script.VerifyFlag.LOW_S.name() + "\"],");
     }
 
@@ -159,7 +157,7 @@ public class GenerateLowSTests {
      */
     private static String scriptToString(Script scriptPubKey) {
         final StringBuilder buf = new StringBuilder();
-        for (ScriptChunk chunk: scriptPubKey.getChunks()) {
+        for (ScriptChunk chunk: scriptPubKey.chunks()) {
             if (buf.length() > 0) {
                 buf.append(" ");
             }

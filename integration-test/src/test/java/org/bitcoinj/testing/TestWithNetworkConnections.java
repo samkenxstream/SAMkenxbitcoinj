@@ -111,9 +111,9 @@ public class TestWithNetworkConnections {
         // Allow subclasses to override the wallet object with their own.
         if (wallet == null) {
             // Reduce the number of keys we need to work with to speed up these tests.
-            KeyChainGroup kcg = KeyChainGroup.builder(UNITTEST).lookaheadSize(4).lookaheadThreshold(2)
+            KeyChainGroup kcg = KeyChainGroup.builder(UNITTEST.network()).lookaheadSize(4).lookaheadThreshold(2)
                     .fromRandom(ScriptType.P2PKH).build();
-            wallet = new Wallet(UNITTEST, kcg);
+            wallet = new Wallet(UNITTEST.network(), kcg);
             address = wallet.freshReceiveAddress(ScriptType.P2PKH);
         }
         blockChain = new BlockChain(UNITTEST, wallet, blockStore);
@@ -219,7 +219,7 @@ public class TestWithNetworkConnections {
         // Send a ping and wait for it to get to the other side
         CompletableFuture<Void> pingReceivedFuture = new CompletableFuture<>();
         p.mapPingFutures.put(nonce, pingReceivedFuture);
-        p.peer.sendMessage(new Ping(nonce));
+        p.peer.sendMessage(Ping.of(nonce));
         pingReceivedFuture.get();
         p.mapPingFutures.remove(nonce);
     }
@@ -228,14 +228,14 @@ public class TestWithNetworkConnections {
         // Receive a ping (that the Peer doesn't see) and wait for it to get through the socket
         final CompletableFuture<Void> pongReceivedFuture = new CompletableFuture<>();
         PreMessageReceivedEventListener listener = (p1, m) -> {
-            if (m instanceof Pong && ((Pong) m).getNonce() == nonce) {
+            if (m instanceof Pong && ((Pong) m).nonce() == nonce) {
                 pongReceivedFuture.complete(null);
                 return null;
             }
             return m;
         };
         p.peer.addPreMessageReceivedEventListener(Threading.SAME_THREAD, listener);
-        inbound(p, new Pong(nonce));
+        inbound(p, Pong.of(nonce));
         pongReceivedFuture.get();
         p.peer.removePreMessageReceivedEventListener(listener);
     }

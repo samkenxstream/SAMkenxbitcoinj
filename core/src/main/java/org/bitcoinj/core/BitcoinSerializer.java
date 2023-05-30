@@ -29,7 +29,6 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 
 import static org.bitcoinj.base.internal.ByteUtils.readUint32;
 import static org.bitcoinj.base.internal.Preconditions.check;
@@ -51,6 +50,7 @@ public class BitcoinSerializer extends MessageSerializer {
     private static final int COMMAND_LEN = 12;
 
     private final NetworkParameters params;
+    private final int packetMagic;
     private final int protocolVersion;
 
     private static final Map<Class<? extends Message>, String> names = new HashMap<>();
@@ -86,7 +86,7 @@ public class BitcoinSerializer extends MessageSerializer {
      * @param params networkParams used to create Messages instances and determining packetMagic
      */
     public BitcoinSerializer(NetworkParameters params) {
-        this(params, params.getProtocolVersionNum(NetworkParameters.ProtocolVersion.CURRENT));
+        this(params, ProtocolVersion.CURRENT.intValue());
     }
 
     /**
@@ -97,6 +97,7 @@ public class BitcoinSerializer extends MessageSerializer {
      */
     public BitcoinSerializer(NetworkParameters params, int protocolVersion) {
         this.params = params;
+        this.packetMagic = params.getPacketMagic();
         this.protocolVersion = protocolVersion;
     }
 
@@ -117,7 +118,7 @@ public class BitcoinSerializer extends MessageSerializer {
     @Override
     public void serialize(String name, byte[] message, OutputStream out) throws IOException {
         byte[] header = new byte[4 + COMMAND_LEN + 4 + 4 /* checksum */];
-        ByteUtils.writeInt32BE(params.getPacketMagic(), header, 0);
+        ByteUtils.writeInt32BE(packetMagic, header, 0);
 
         // The header array is initialized to zero by Java so we don't have to worry about
         // NULL terminating the string here.
@@ -145,7 +146,7 @@ public class BitcoinSerializer extends MessageSerializer {
         if (name == null) {
             throw new Error("BitcoinSerializer doesn't currently know how to serialize " + message.getClass());
         }
-        serialize(name, message.bitcoinSerialize(), out);
+        serialize(name, message.serialize(), out);
     }
 
     /**
@@ -217,7 +218,7 @@ public class BitcoinSerializer extends MessageSerializer {
         ByteBuffer payload = ByteBuffer.wrap(payloadBytes);
         // We use an if ladder rather than reflection because reflection is very slow on Android.
         if (command.equals("version")) {
-            return new VersionMessage(payload);
+            return VersionMessage.read(payload);
         } else if (command.equals("inv")) { 
             return makeInventoryMessage(payload);
         } else if (command.equals("block")) {
@@ -225,13 +226,13 @@ public class BitcoinSerializer extends MessageSerializer {
         } else if (command.equals("merkleblock")) {
             return makeFilteredBlock(payload);
         } else if (command.equals("getdata")) {
-            return new GetDataMessage(payload);
+            return GetDataMessage.read(payload);
         } else if (command.equals("getblocks")) {
-            return new GetBlocksMessage(payload);
+            return GetBlocksMessage.read(payload);
         } else if (command.equals("getheaders")) {
-            return new GetHeadersMessage(payload);
+            return GetHeadersMessage.read(payload);
         } else if (command.equals("tx")) {
-            return makeTransaction(payload, hash);
+            return makeTransaction(payload);
         } else if (command.equals("sendaddrv2")) {
             check(!payload.hasRemaining(), ProtocolException::new);
             return new SendAddrV2Message();
@@ -240,27 +241,27 @@ public class BitcoinSerializer extends MessageSerializer {
         } else if (command.equals("addrv2")) {
             return makeAddressV2Message(payload);
         } else if (command.equals("ping")) {
-            return new Ping(payload);
+            return Ping.read(payload);
         } else if (command.equals("pong")) {
-            return new Pong(payload);
+            return Pong.read(payload);
         } else if (command.equals("verack")) {
             check(!payload.hasRemaining(), ProtocolException::new);
             return new VersionAck();
         } else if (command.equals("headers")) {
-            return new HeadersMessage(payload);
+            return HeadersMessage.read(payload);
         } else if (command.equals("filterload")) {
             return makeBloomFilter(payload);
         } else if (command.equals("notfound")) {
-            return new NotFoundMessage(payload);
+            return NotFoundMessage.read(payload);
         } else if (command.equals("mempool")) {
             return new MemoryPoolMessage();
         } else if (command.equals("reject")) {
-            return new RejectMessage(payload);
+            return RejectMessage.read(payload);
         } else if (command.equals("sendheaders")) {
             check(!payload.hasRemaining(), ProtocolException::new);
             return new SendHeadersMessage();
         } else if (command.equals("feefilter")) {
-            return new FeeFilterMessage(payload);
+            return FeeFilterMessage.read(payload);
         } else {
             check(!payload.hasRemaining(), ProtocolException::new);
             return new UnknownMessage(command);
@@ -280,7 +281,7 @@ public class BitcoinSerializer extends MessageSerializer {
      */
     @Override
     public AddressV1Message makeAddressV1Message(ByteBuffer payload) throws ProtocolException {
-        return new AddressV1Message(payload);
+        return AddressV1Message.read(payload);
     }
 
     /**
@@ -289,7 +290,7 @@ public class BitcoinSerializer extends MessageSerializer {
      */
     @Override
     public AddressV2Message makeAddressV2Message(ByteBuffer payload) throws ProtocolException {
-        return new AddressV2Message(payload);
+        return AddressV2Message.read(payload);
     }
 
     /**
@@ -298,7 +299,7 @@ public class BitcoinSerializer extends MessageSerializer {
      */
     @Override
     public Block makeBlock(ByteBuffer payload) throws ProtocolException {
-        return new Block(payload);
+        return Block.read(payload);
     }
 
     /**
@@ -307,7 +308,7 @@ public class BitcoinSerializer extends MessageSerializer {
      */
     @Override
     public Message makeBloomFilter(ByteBuffer payload) throws ProtocolException {
-        return new BloomFilter(payload);
+        return BloomFilter.read(payload);
     }
 
     /**
@@ -316,7 +317,7 @@ public class BitcoinSerializer extends MessageSerializer {
      */
     @Override
     public FilteredBlock makeFilteredBlock(ByteBuffer payload) throws ProtocolException {
-        return new FilteredBlock(payload);
+        return FilteredBlock.read(payload);
     }
 
     /**
@@ -325,7 +326,7 @@ public class BitcoinSerializer extends MessageSerializer {
      */
     @Override
     public InventoryMessage makeInventoryMessage(ByteBuffer payload) throws ProtocolException {
-        return new InventoryMessage(payload);
+        return InventoryMessage.read(payload);
     }
 
     /**
@@ -333,9 +334,9 @@ public class BitcoinSerializer extends MessageSerializer {
      * serialization format support.
      */
     @Override
-    public Transaction makeTransaction(ByteBuffer payload, byte[] hashFromHeader)
+    public Transaction makeTransaction(ByteBuffer payload)
             throws ProtocolException {
-        return new Transaction(payload, this, hashFromHeader);
+        return Transaction.read(payload, protocolVersion);
     }
 
     @Override
@@ -345,7 +346,7 @@ public class BitcoinSerializer extends MessageSerializer {
             byte b = in.get();
             // We're looking for a run of bytes that is the same as the packet magic but we want to ignore partial
             // magics that aren't complete. So we keep track of where we're up to with magicCursor.
-            byte expectedByte = (byte)(0xFF & params.getPacketMagic() >>> (magicCursor * 8));
+            byte expectedByte = (byte)(0xFF & packetMagic >>> (magicCursor * 8));
             if (b == expectedByte) {
                 magicCursor--;
                 if (magicCursor < 0) {
@@ -394,19 +395,5 @@ public class BitcoinSerializer extends MessageSerializer {
             // Note that the size read above includes the checksum bytes.
             System.arraycopy(header, cursor, checksum, 0, 4);
         }
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || !(o instanceof BitcoinSerializer)) return false;
-        BitcoinSerializer other = (BitcoinSerializer) o;
-        return Objects.equals(params, other.params) &&
-                protocolVersion == other.protocolVersion;
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(params, protocolVersion);
     }
 }

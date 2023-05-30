@@ -245,7 +245,7 @@ public class Peer extends PeerSocketHandler {
         this.getAddrFutures = new LinkedList<>();
         this.fastCatchupTime = params.getGenesisBlock().time();
         this.pendingPings = new CopyOnWriteArrayList<>();
-        this.vMinProtocolVersion = params.getProtocolVersionNum(NetworkParameters.ProtocolVersion.MINIMUM);
+        this.vMinProtocolVersion = ProtocolVersion.MINIMUM.intValue();
         this.wallets = new CopyOnWriteArrayList<>();
         this.context = Context.get();
 
@@ -714,7 +714,7 @@ public class Peer extends PeerSocketHandler {
 
     protected void processTransaction(final Transaction tx) throws VerificationException {
         // Check a few basic syntax issues to ensure the received TX isn't nonsense.
-        tx.verify(params, tx);
+        tx.verify(params.network(), tx);
         lock.lock();
         try {
             if (log.isDebugEnabled())
@@ -1254,7 +1254,7 @@ public class Peer extends PeerSocketHandler {
         }
 
         if (pingAfterGetData)
-            sendMessage(new Ping((long) (Math.random() * Long.MAX_VALUE)));
+            sendMessage(Ping.random());
     }
 
     /**
@@ -1555,7 +1555,7 @@ public class Peer extends PeerSocketHandler {
         }
         PendingPing pendingPing = new PendingPing(nonce);
         pendingPings.add(pendingPing);
-        sendMessage(new Ping(pendingPing.nonce));
+        sendMessage(Ping.of(pendingPing.nonce));
         return pendingPing.future;
     }
 
@@ -1603,13 +1603,13 @@ public class Peer extends PeerSocketHandler {
     }
 
     private void processPing(Ping m) {
-        sendMessage(new Pong(m.getNonce()));
+        sendMessage(m.pong());
     }
 
     protected void processPong(Pong m) {
         // Iterates over a snapshot of the list, so we can run unlocked here.
         for (PendingPing ping : pendingPings) {
-            if (m.getNonce() == ping.nonce) {
+            if (m.nonce() == ping.nonce) {
                 pendingPings.remove(ping);
                 // This line may trigger an event listener that re-runs ping().
                 ping.complete();
@@ -1619,8 +1619,8 @@ public class Peer extends PeerSocketHandler {
     }
 
     private void processFeeFilter(FeeFilterMessage m) {
-        log.info("{}: Announced fee filter: {}/kB", this, m.getFeeRate().toFriendlyString());
-        vFeeFilter = m.getFeeRate();
+        log.info("{}: Announced fee filter: {}/kB", this, m.feeRate().toFriendlyString());
+        vFeeFilter = m.feeRate();
     }
 
     /**
@@ -1770,7 +1770,7 @@ public class Peer extends PeerSocketHandler {
                 // TODO: This bizarre ping-after-getdata hack probably isn't necessary.
                 // It's to ensure we know when the end of a filtered block stream of txns is, but we should just be
                 // able to match txns with the merkleblock. Ask Matt why it's written this way.
-                sendMessage(new Ping((long) (Math.random() * Long.MAX_VALUE)));
+                sendMessage(Ping.random());
             }, Threading.SAME_THREAD);
         } finally {
             lock.unlock();
@@ -1817,8 +1817,8 @@ public class Peer extends PeerSocketHandler {
      */
     private boolean isBloomFilteringSupported(VersionMessage version) {
         int clientVersion = version.clientVersion();
-        if (clientVersion >= params.getProtocolVersionNum(NetworkParameters.ProtocolVersion.BLOOM_FILTER)
-                && clientVersion < params.getProtocolVersionNum(NetworkParameters.ProtocolVersion.BLOOM_FILTER_BIP111))
+        if (clientVersion >= ProtocolVersion.BLOOM_FILTER.intValue()
+                && clientVersion < ProtocolVersion.BLOOM_FILTER_BIP111.intValue())
             return true;
         if (version.services().has(Services.NODE_BLOOM))
             return true;

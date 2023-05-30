@@ -16,6 +16,7 @@
 
 package org.bitcoinj.testing;
 
+import org.bitcoinj.base.BitcoinNetwork;
 import org.bitcoinj.base.ScriptType;
 import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.core.AbstractBlockChain;
@@ -68,7 +69,7 @@ public class TestWithWallet {
     public void setUp() throws Exception {
         BriefLogFormatter.init();
         Context.propagate(new Context(100, Coin.ZERO, false, true));
-        wallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH, KeyChainGroupStructure.BIP32);
+        wallet = Wallet.createDeterministic(BitcoinNetwork.TESTNET, ScriptType.P2PKH, KeyChainGroupStructure.BIP32);
         myKey = wallet.freshReceiveKey();
         myAddress = wallet.freshReceiveAddress(ScriptType.P2PKH);
         blockStore = new MemoryBlockStore(TESTNET.getGenesisBlock());
@@ -101,7 +102,7 @@ public class TestWithWallet {
 
     @Nullable
     protected Transaction sendMoneyToWallet(Wallet wallet, AbstractBlockChain.NewBlockType type, Coin value, Address toAddress) throws VerificationException {
-        return sendMoneyToWallet(wallet, type, createFakeTx(TESTNET, value, toAddress));
+        return sendMoneyToWallet(wallet, type, createFakeTx(TESTNET.network(), value, toAddress));
     }
 
     @Nullable

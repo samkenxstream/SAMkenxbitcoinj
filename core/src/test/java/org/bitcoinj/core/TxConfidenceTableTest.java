@@ -61,14 +61,14 @@ public class TxConfidenceTableTest {
         tx2 = FakeTxBuilder.createFakeTxWithChangeAddress(COIN, to, change);
         assertEquals(tx1.getTxId(), tx2.getTxId());
 
-        address1 = new PeerAddress(InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }), TESTNET.getPort());
-        address2 = new PeerAddress(InetAddress.getByAddress(new byte[] { 127, 0, 0, 2 }), TESTNET.getPort());
-        address3 = new PeerAddress(InetAddress.getByAddress(new byte[] { 127, 0, 0, 3 }), TESTNET.getPort());
+        address1 = PeerAddress.simple(InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }), TESTNET.getPort());
+        address2 = PeerAddress.simple(InetAddress.getByAddress(new byte[] { 127, 0, 0, 2 }), TESTNET.getPort());
+        address3 = PeerAddress.simple(InetAddress.getByAddress(new byte[] { 127, 0, 0, 3 }), TESTNET.getPort());
     }
 
     @Test
     public void pinHandlers() {
-        Transaction tx = TESTNET.getDefaultSerializer().makeTransaction(ByteBuffer.wrap(tx1.bitcoinSerialize()));
+        Transaction tx = TESTNET.getDefaultSerializer().makeTransaction(ByteBuffer.wrap(tx1.serialize()));
         Sha256Hash hash = tx.getTxId();
         table.seen(hash, address1);
         assertEquals(1, tx.getConfidence().numBroadcastPeers());

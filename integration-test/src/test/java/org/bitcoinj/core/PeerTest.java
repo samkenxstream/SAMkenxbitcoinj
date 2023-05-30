@@ -94,7 +94,7 @@ public class PeerTest extends TestWithNetworkConnections {
         super.setUp();
         VersionMessage ver = new VersionMessage(TESTNET, 100);
         InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), 4000);
-        peer = new Peer(TESTNET, ver, new PeerAddress(address), blockChain);
+        peer = new Peer(TESTNET, ver, PeerAddress.simple(address), blockChain);
         peer.addWallet(wallet);
     }
 
@@ -253,7 +253,7 @@ public class PeerTest extends TestWithNetworkConnections {
         peer.setDownloadData(true);
         // Make a transaction and tell the peer we have it.
         Coin value = COIN;
-        Transaction tx = createFakeTx(TESTNET, value, address);
+        Transaction tx = createFakeTx(TESTNET.network(), value, address);
         InventoryMessage inv = new InventoryMessage();
         InventoryItem item = new InventoryItem(InventoryItem.Type.TRANSACTION, tx.getTxId());
         inv.addItem(item);
@@ -275,7 +275,7 @@ public class PeerTest extends TestWithNetworkConnections {
         // Check co-ordination of which peer to download via the memory pool.
         VersionMessage ver = new VersionMessage(TESTNET, 100);
         InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), 4242);
-        Peer peer2 = new Peer(TESTNET, ver, new PeerAddress(address), blockChain);
+        Peer peer2 = new Peer(TESTNET, ver, PeerAddress.simple(address), blockChain);
         peer2.addWallet(wallet);
         VersionMessage peerVersion = new VersionMessage(TESTNET, OTHER_PEER_CHAIN_HEIGHT);
         peerVersion.clientVersion = 70001;
@@ -286,7 +286,7 @@ public class PeerTest extends TestWithNetworkConnections {
 
         // Make a tx and advertise it to one of the peers.
         Coin value = COIN;
-        Transaction tx = createFakeTx(TESTNET, value, this.address);
+        Transaction tx = createFakeTx(TESTNET.network(), value, this.address);
         InventoryMessage inv = new InventoryMessage();
         InventoryItem item = new InventoryItem(InventoryItem.Type.TRANSACTION, tx.getTxId());
         inv.addItem(item);
@@ -515,7 +515,7 @@ public class PeerTest extends TestWithNetworkConnections {
         Ping pingMsg = (Ping) outbound(writeTarget);
         TimeUtils.rollMockClock(Duration.ofSeconds(5));
         // The pong is returned.
-        inbound(writeTarget, new Pong(pingMsg.getNonce()));
+        inbound(writeTarget, pingMsg.pong());
         pingAndWait(writeTarget);
         assertTrue(future.isDone());
         Duration elapsed = future.get();
@@ -526,7 +526,7 @@ public class PeerTest extends TestWithNetworkConnections {
         CompletableFuture<Duration> future2 = peer.sendPing();
         pingMsg = (Ping) outbound(writeTarget);
         TimeUtils.rollMockClock(Duration.ofSeconds(50));
-        inbound(writeTarget, new Pong(pingMsg.getNonce()));
+        inbound(writeTarget, pingMsg.pong());
         Duration elapsed2 = future2.get();
         assertEquals(elapsed2, peer.lastPingInterval().get());
         assertEquals(Duration.ofMillis(7250), peer.pingInterval().get());
@@ -538,7 +538,7 @@ public class PeerTest extends TestWithNetworkConnections {
         peer.setDownloadTxDependencies(false);
         connect();
         // Check that if we request dependency download to be disabled and receive a relevant tx, things work correctly.
-        Transaction tx = createFakeTx(TESTNET, COIN, address);
+        Transaction tx = createFakeTx(TESTNET.network(), COIN, address);
         final Transaction[] result = new Transaction[1];
         wallet.addCoinsReceivedEventListener((wallet, tx1, prevBalance, newBalance) -> result[0] = tx1);
         inbound(writeTarget, tx);
@@ -694,7 +694,7 @@ public class PeerTest extends TestWithNetworkConnections {
         connectWithVersion(70001, Services.NODE_NETWORK);
         // Test that if we receive a relevant transaction that has a lock time, it doesn't result in a notification
         // until we explicitly opt in to seeing those.
-        Wallet wallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH);
+        Wallet wallet = Wallet.createDeterministic(BitcoinNetwork.TESTNET, ScriptType.P2PKH);
         ECKey key = wallet.freshReceiveKey();
         peer.addWallet(wallet);
         final Transaction[] vtx = new Transaction[1];
@@ -740,7 +740,7 @@ public class PeerTest extends TestWithNetworkConnections {
     private void checkTimeLockedDependency(boolean shouldAccept) throws Exception {
         // Initial setup.
         connectWithVersion(70001, Services.NODE_NETWORK);
-        Wallet wallet = Wallet.createDeterministic(TESTNET, ScriptType.P2PKH);
+        Wallet wallet = Wallet.createDeterministic(BitcoinNetwork.TESTNET, ScriptType.P2PKH);
         ECKey key = wallet.freshReceiveKey();
         wallet.setAcceptRiskyTransactions(shouldAccept);
         peer.addWallet(wallet);
@@ -865,7 +865,7 @@ public class PeerTest extends TestWithNetworkConnections {
                 bits = Arrays.copyOf(bits, bits.length / 2);
                 stream.write(bits);
             }
-        }.bitcoinSerialize(), out);
+        }.serialize(), out);
         writeTarget.writeTarget.writeBytes(out.toByteArray());
         try {
             result.get();

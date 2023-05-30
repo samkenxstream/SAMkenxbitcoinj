@@ -38,9 +38,13 @@ import static org.bitcoinj.base.Coin.COIN;
  * method for input of network values.
  */
 public enum BitcoinNetwork implements Network {
+    /** The main Bitcoin network, known as {@code "mainnet"}, with {@code id} string {@code "org.bitcoin.production"}  */
     MAINNET("org.bitcoin.production", "main", "prod"),
+    /** The Bitcoin test network, known as {@code "testnet"}, with {@code id} string {@code "org.bitcoin.test"}  */
     TESTNET("org.bitcoin.test", "test"),
+    /** The Bitcoin signature-based test network, known as {@code "signet"}, with {@code id} string {@code "org.bitcoin.signet"}  */
     SIGNET("org.bitcoin.signet", "sig"),
+    /** A local Bitcoin regression test network, known as {@code "regtest"}, with {@code id} string {@code "org.bitcoin.regtest"}  */
     REGTEST("org.bitcoin.regtest");
 
     /**
@@ -66,8 +70,6 @@ public enum BitcoinNetwork implements Network {
     public static final String ID_SIGNET = SIGNET.id();
     /** The ID string for regtest mode. */
     public static final String ID_REGTEST = REGTEST.id();
-    /** The ID string for the Unit test network -- there is no corresponding {@code enum}. */
-    public static final String ID_UNITTESTNET = "org.bitcoinj.unittest";
 
     private final String id;
 
@@ -83,8 +85,20 @@ public enum BitcoinNetwork implements Network {
     }
 
     /**
-     * Return the canonical, lowercase, user-facing {@code String} for an {@code enum}
-     * @return canonical lowercase value
+     * Return the canonical, lowercase, user-facing {@code String} for an {@code enum}.
+     * It is the lowercase value of {@link #name()} and can be displayed to the user, used
+     * as a command-line parameter, etc.
+     * <dl>
+     *     <dt>{@link #MAINNET}</dt>
+     *     <dd>{@code mainnet}</dd>
+     *     <dt>{@link #TESTNET}</dt>
+     *     <dd>{@code testnet}</dd>
+     *     <dt>{@link #SIGNET}</dt>
+     *     <dd>{@code signet}</dd>
+     *     <dt>{@link #REGTEST}</dt>
+     *     <dd>{@code regtest}</dd>
+     * </dl>
+     * @return canonical lowercase name for this Bitcoin network
      */
     @Override
     public String toString() {
@@ -92,7 +106,17 @@ public enum BitcoinNetwork implements Network {
     }
 
     /**
-     * Return the network ID string (previously specified in {@code NetworkParameters})
+     * Return the network ID string as defined by (these were previously defined in {@code NetworkParameters})
+     * <dl>
+     *     <dt>{@link #MAINNET}</dt>
+     *     <dd>{@code org.bitcoin.production}</dd>
+     *     <dt>{@link #TESTNET}</dt>
+     *     <dd>{@code org.bitcoin.test}</dd>
+     *     <dt>{@link #SIGNET}</dt>
+     *     <dd>{@code org.bitcoin.signet}</dd>
+     *     <dt>{@link #REGTEST}</dt>
+     *     <dd>{@code org.bitcoin.regtest}</dd>
+     * </dl>
      *
      * @return The network ID string
      */
@@ -169,8 +193,6 @@ public enum BitcoinNetwork implements Network {
 
     /**
      * Find the {@code BitcoinNetwork} from an ID String
-     * <p>
-     * Note: {@link #ID_UNITTESTNET} is not supported as an enum
      * @param idString specifies the network
      * @return An {@code Optional} containing the matching enum or empty
      */

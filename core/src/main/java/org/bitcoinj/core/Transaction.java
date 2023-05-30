@@ -69,9 +69,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
 
+import static org.bitcoinj.base.internal.Preconditions.check;
 import static org.bitcoinj.base.internal.Preconditions.checkArgument;
 import static org.bitcoinj.base.internal.Preconditions.checkState;
-import static org.bitcoinj.core.NetworkParameters.ProtocolVersion.WITNESS_VERSION;
+import static org.bitcoinj.core.ProtocolVersion.WITNESS_VERSION;
 import static org.bitcoinj.base.internal.ByteUtils.writeInt32LE;
 import static org.bitcoinj.base.internal.ByteUtils.writeInt64LE;
 
@@ -91,7 +92,7 @@ import static org.bitcoinj.base.internal.ByteUtils.writeInt64LE;
  * 
  * <p>Instances of this class are not safe for use by multiple threads.</p>
  */
-public class Transaction extends Message {
+public class Transaction extends BaseMessage {
     private static final Comparator<Transaction> SORT_TX_BY_ID = Comparator.comparing(Transaction::getTxId);
 
     /**
@@ -155,10 +156,12 @@ public class Transaction extends Message {
      */
     public static final Coin DEFAULT_TX_FEE = Coin.valueOf(100000); // 1 mBTC
 
+    private final int protocolVersion;
+
     // These are bitcoin serialized.
     private long version;
-    private ArrayList<TransactionInput> inputs;
-    private ArrayList<TransactionOutput> outputs;
+    private List<TransactionInput> inputs;
+    private List<TransactionOutput> outputs;
 
     private volatile LockTime vLockTime;
 
@@ -167,10 +170,6 @@ public class Transaction extends Message {
     // Old serialized transactions don't have this field, thus null is valid. It is used for returning an ordered
     // list of transactions from a wallet, which is helpful for presenting to users.
     @Nullable private Instant updateTime = null;
-
-    // These are in memory helpers only. They contain the transaction hashes without and with witness.
-    private Sha256Hash cachedTxId;
-    private Sha256Hash cachedWTxId;
 
     // Data about how confirmed this tx is. Serialized, may be null.
     @Nullable private TransactionConfidence confidence;
@@ -246,8 +245,77 @@ public class Transaction extends Message {
         return tx;
     }
 
+    /**
+     * Deserialize this message from a given payload.
+     *
+     * @param payload payload to deserialize from
+     * @return read message
+     * @throws BufferUnderflowException if the read message extends beyond the remaining bytes of the payload
+     */
+    public static Transaction read(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        return Transaction.read(payload, ProtocolVersion.CURRENT.intValue());
+    }
+
+    /**
+     * Deserialize this message from a given payload, according to
+     * <a href="https://github.com/bitcoin/bips/blob/master/bip-0144.mediawiki">BIP144</a> or the
+     * <a href="https://en.bitcoin.it/wiki/Protocol_documentation#tx">classic format</a>, depending on if the
+     * transaction is segwit or not.
+     *
+     * @param payload         payload to deserialize from
+     * @param protocolVersion protocol version to use for deserialization
+     * @return read message
+     * @throws BufferUnderflowException if the read message extends beyond the remaining bytes of the payload
+     */
+    public static Transaction read(ByteBuffer payload, int protocolVersion) throws BufferUnderflowException, ProtocolException {
+        Transaction tx = new Transaction(protocolVersion);
+        boolean allowWitness = allowWitness(protocolVersion);
+
+        // version
+        tx.version = ByteUtils.readUint32(payload);
+        byte flags = 0;
+        // Try to parse the inputs. In case the dummy is there, this will be read as an empty array list.
+        tx.readInputs(payload);
+        if (tx.inputs.size() == 0 && allowWitness) {
+            // We read a dummy or an empty input
+            flags = payload.get();
+
+            if (flags != 0) {
+                tx.readInputs(payload);
+                tx.readOutputs(payload);
+            } else {
+                tx.outputs = new ArrayList<>(0);
+            }
+        } else {
+            // We read non-empty inputs. Assume normal outputs follows.
+            tx.readOutputs(payload);
+        }
+
+        if (((flags & 1) != 0) && allowWitness) {
+            // The witness flag is present, and we support witnesses.
+            flags ^= 1;
+            // script_witnesses
+            tx.readWitnesses(payload);
+            if (!tx.hasWitnesses()) {
+                // It's illegal to encode witnesses when all witness stacks are empty.
+                throw new ProtocolException("Superfluous witness record");
+            }
+        }
+        if (flags != 0) {
+            // Unknown flag in the serialization
+            throw new ProtocolException("Unknown transaction optional data");
+        }
+        // lock_time
+        tx.vLockTime = LockTime.of(ByteUtils.readUint32(payload));
+        return tx;
+    }
+
+    private Transaction(int protocolVersion) {
+        this.protocolVersion = protocolVersion;
+    }
+
     public Transaction() {
-        super(new DummySerializer(NetworkParameters.ProtocolVersion.CURRENT.getBitcoinProtocolVersion()));
+        this.protocolVersion = ProtocolVersion.CURRENT.intValue();
         version = 1;
         inputs = new ArrayList<>();
         outputs = new ArrayList<>();
@@ -256,65 +324,17 @@ public class Transaction extends Message {
     }
 
     /**
-     * Creates a transaction from the given serialized bytes, eg, from a block or a tx network message.
-     */
-    public Transaction(ByteBuffer payload) throws ProtocolException {
-        super(payload, new DummySerializer(NetworkParameters.ProtocolVersion.CURRENT.getBitcoinProtocolVersion()));
-        // inputs/outputs will be created in parse()
-    }
-
-    /** @deprecated use {@link #Transaction(ByteBuffer)} or {@link MessageSerializer#makeTransaction(ByteBuffer)} */
-    @Deprecated
-    public Transaction(NetworkParameters params, byte[] payload) throws ProtocolException {
-        this(ByteBuffer.wrap(payload));
-    }
-
-    /**
-     * Creates a transaction by reading payload starting from offset bytes in. Length of a transaction is fixed.
-     * @param payload Bitcoin protocol formatted byte array containing message content.
-     * @param setSerializer The serializer to use for this transaction.
-     * @param hashFromHeader Used by BitcoinSerializer. The serializer has to calculate a hash for checksumming so to
-     * avoid wasting the considerable effort a set method is provided so the serializer can set it. No verification
-     * is performed on this hash.
-     * @throws ProtocolException
-     */
-    public Transaction(ByteBuffer payload,
-            MessageSerializer setSerializer, @Nullable byte[] hashFromHeader) throws ProtocolException {
-        super(payload, setSerializer);
-        if (hashFromHeader != null) {
-            cachedWTxId = Sha256Hash.wrapReversed(hashFromHeader);
-            if (!hasWitnesses())
-                cachedTxId = cachedWTxId;
-        }
-    }
-
-    /**
-     * Creates a transaction by reading payload. Length of a transaction is fixed.
-     */
-    public Transaction(ByteBuffer payload, MessageSerializer setSerializer)
-            throws ProtocolException {
-        super(payload, setSerializer);
-    }
-
-    /**
      * Returns the transaction id as you see them in block explorers. It is used as a reference by transaction inputs
      * via outpoints.
      */
     public Sha256Hash getTxId() {
-        if (cachedTxId == null) {
-            if (!hasWitnesses() && cachedWTxId != null) {
-                cachedTxId = cachedWTxId;
-            } else {
-                ByteArrayOutputStream stream = new ByteArrayOutputStream(255); // just a guess at an average tx length
-                try {
-                    bitcoinSerializeToStream(stream, false);
-                } catch (IOException e) {
-                    throw new RuntimeException(e); // cannot happen
-                }
-                cachedTxId = Sha256Hash.wrapReversed(Sha256Hash.hashTwice(stream.toByteArray()));
-            }
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try {
+            bitcoinSerializeToStream(baos, false);
+        } catch (IOException e) {
+            throw new RuntimeException(e); // cannot happen
         }
-        return cachedTxId;
+        return Sha256Hash.wrapReversed(Sha256Hash.hashTwice(baos.toByteArray()));
     }
 
     /**
@@ -322,7 +342,7 @@ public class Transaction extends Message {
      */
     private static boolean allowWitness(int protocolVersion) {
         return (protocolVersion & SERIALIZE_TRANSACTION_NO_WITNESS) == 0
-                && protocolVersion >= WITNESS_VERSION.getBitcoinProtocolVersion();
+                && protocolVersion >= WITNESS_VERSION.intValue();
     }
 
     /**
@@ -330,26 +350,19 @@ public class Transaction extends Message {
      * same as {@link #getTxId()}.
      */
     public Sha256Hash getWTxId() {
-        if (cachedWTxId == null) {
-            if (!hasWitnesses() && cachedTxId != null) {
-                cachedWTxId = cachedTxId;
-            } else {
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                try {
-                    bitcoinSerializeToStream(baos, hasWitnesses());
-                } catch (IOException e) {
-                    throw new RuntimeException(e); // cannot happen
-                }
-                cachedWTxId = Sha256Hash.wrapReversed(Sha256Hash.hashTwice(baos.toByteArray()));
-            }
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try {
+            bitcoinSerializeToStream(baos, hasWitnesses());
+        } catch (IOException e) {
+            throw new RuntimeException(e); // cannot happen
         }
-        return cachedWTxId;
+        return Sha256Hash.wrapReversed(Sha256Hash.hashTwice(baos.toByteArray()));
     }
 
     /** Gets the transaction weight as defined in BIP141. */
     public int getWeight() {
         if (!hasWitnesses())
-            return getMessageSize() * 4;
+            return this.messageSize() * 4;
         try (final ByteArrayOutputStream stream = new ByteArrayOutputStream(255)) { // just a guess at an average tx length
             bitcoinSerializeToStream(stream, false);
             final int baseSize = stream.size();
@@ -365,24 +378,23 @@ public class Transaction extends Message {
     /** Gets the virtual transaction size as defined in BIP141. */
     public int getVsize() {
         if (!hasWitnesses())
-            return getMessageSize();
+            return this.messageSize();
         return IntMath.divide(getWeight(), 4, RoundingMode.CEILING); // round up
     }
 
+
     /**
-     * Gets the sum of the inputs, regardless of who owns them.
+     * Gets the sum of all transaction inputs, regardless of who owns them.
+     * <p>
+     * <b>Warning:</b> Inputs with {@code null} {@link TransactionInput#getValue()} are silently skipped. Before completing
+     * or signing a transaction you should verify that there are no inputs with {@code null} values.
+     * @return The sum of all inputs with non-null values.
      */
     public Coin getInputSum() {
-        Coin inputTotal = Coin.ZERO;
-
-        for (TransactionInput input: inputs) {
-            Coin inputValue = input.getValue();
-            if (inputValue != null) {
-                inputTotal = inputTotal.add(inputValue);
-            }
-        }
-
-        return inputTotal;
+        return inputs.stream()
+                .map(TransactionInput::getValue)
+                .filter(Objects::nonNull)
+                .reduce(Coin.ZERO, Coin::add);
     }
 
     /**
@@ -487,13 +499,9 @@ public class Transaction extends Message {
      * @return the sum of the outputs regardless of who owns them.
      */
     public Coin getOutputSum() {
-        Coin totalOut = Coin.ZERO;
-
-        for (TransactionOutput output: outputs) {
-            totalOut = totalOut.add(output.getValue());
-        }
-
-        return totalOut;
+        return outputs.stream()
+                .map(TransactionOutput::getValue)
+                .reduce(Coin.ZERO, Coin::add);
     }
 
     /**
@@ -621,109 +629,35 @@ public class Transaction extends Message {
      */
     public static final byte SIGHASH_ANYONECANPAY_VALUE = (byte) 0x80;
 
-    protected void unCache() {
-        cachedTxId = null;
-        cachedWTxId = null;
-    }
-
-    /**
-     * Deserialize according to <a href="https://github.com/bitcoin/bips/blob/master/bip-0144.mediawiki">BIP144</a> or
-     * the <a href="https://en.bitcoin.it/wiki/Protocol_documentation#tx">classic format</a>, depending on if the
-     * transaction is segwit or not.
-     */
-    @Override
-    protected void parse(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
-        boolean allowWitness = allowWitness(serializer.getProtocolVersion());
-
-
-        // version
-        version = ByteUtils.readUint32(payload);
-        byte flags = 0;
-        // Try to parse the inputs. In case the dummy is there, this will be read as an empty array list.
-        parseInputs(payload);
-        if (inputs.size() == 0 && allowWitness) {
-            // We read a dummy or an empty input
-            flags = payload.get();
-
-            if (flags != 0) {
-                parseInputs(payload);
-                parseOutputs(payload);
-            } else {
-                outputs = new ArrayList<>(0);
-            }
-        } else {
-            // We read non-empty inputs. Assume normal outputs follows.
-            parseOutputs(payload);
-        }
-
-        if (((flags & 1) != 0) && allowWitness) {
-            // The witness flag is present, and we support witnesses.
-            flags ^= 1;
-            // script_witnesses
-            parseWitnesses(payload);
-            if (!hasWitnesses()) {
-                // It's illegal to encode witnesses when all witness stacks are empty.
-                throw new ProtocolException("Superfluous witness record");
-            }
-        }
-        if (flags != 0) {
-            // Unknown flag in the serialization
-            throw new ProtocolException("Unknown transaction optional data");
-        }
-        // lock_time
-        vLockTime = LockTime.of(ByteUtils.readUint32(payload));
-    }
-
-    private void parseInputs(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+    private void readInputs(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
         VarInt numInputsVarInt = VarInt.read(payload);
+        check(numInputsVarInt.fitsInt(), BufferUnderflowException::new);
         int numInputs = numInputsVarInt.intValue();
         inputs = new ArrayList<>(Math.min((int) numInputs, Utils.MAX_INITIAL_ARRAY_LENGTH));
         for (long i = 0; i < numInputs; i++) {
-            TransactionInput input = TransactionInput.read(payload.slice(), this);
-            inputs.add(input);
-            // intentionally read again, due to the slice above
-            Buffers.skipBytes(payload, TransactionOutPoint.BYTES);
-            VarInt scriptLenVarInt = VarInt.read(payload);
-            int scriptLen = scriptLenVarInt.intValue();
-            Buffers.skipBytes(payload, scriptLen + 4);
+            inputs.add(TransactionInput.read(payload, this));
         }
     }
 
-    private void parseOutputs(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+    private void readOutputs(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
         VarInt numOutputsVarInt = VarInt.read(payload);
+        check(numOutputsVarInt.fitsInt(), BufferUnderflowException::new);
         int numOutputs = numOutputsVarInt.intValue();
         outputs = new ArrayList<>(Math.min((int) numOutputs, Utils.MAX_INITIAL_ARRAY_LENGTH));
         for (long i = 0; i < numOutputs; i++) {
-            TransactionOutput output = new TransactionOutput(this, payload.slice());
-            outputs.add(output);
-            // intentionally read again, due to the slice above
-            Buffers.skipBytes(payload, 8); // value
-            VarInt scriptLenVarInt = VarInt.read(payload);
-            int scriptLen = scriptLenVarInt.intValue();
-            Buffers.skipBytes(payload, scriptLen);
+            outputs.add(TransactionOutput.read(payload, this));
         }
     }
 
-    private void parseWitnesses(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
-        int numWitnesses = inputs.size();
-        for (int i = 0; i < numWitnesses; i++) {
-            VarInt pushCountVarInt = VarInt.read(payload);
-            int pushCount = pushCountVarInt.intValue();
-            TransactionWitness witness = new TransactionWitness(pushCount);
-            getInput(i).setWitness(witness);
-            for (int y = 0; y < pushCount; y++) {
-                byte[] push = Buffers.readLengthPrefixedBytes(payload);
-                witness.setPush(y, push);
-            }
+    private void readWitnesses(ByteBuffer payload) throws BufferUnderflowException, ProtocolException {
+        for (TransactionInput input : inputs) {
+            input.setWitness(TransactionWitness.read(payload));
         }
     }
 
     /** @return true of the transaction has any witnesses in any of its inputs */
     public boolean hasWitnesses() {
-        for (TransactionInput in : inputs)
-            if (in.hasWitness())
-                return true;
-        return false;
+        return inputs.stream().anyMatch(TransactionInput::hasWitness);
     }
 
     /**
@@ -732,11 +666,11 @@ public class Transaction extends Message {
      * can do so.
      */
     public int getMessageSizeForPriorityCalc() {
-        int size = getMessageSize();
+        int size = this.messageSize();
         for (TransactionInput input : inputs) {
             // 41: min size of an input
             // 110: enough to cover a compressed pubkey p2sh redemption (somewhat arbitrary).
-            int benefit = 41 + Math.min(110, input.getScriptSig().getProgram().length);
+            int benefit = 41 + Math.min(110, input.getScriptSig().program().length);
             if (size > benefit)
                 size -= benefit;
         }
@@ -784,7 +718,7 @@ public class Transaction extends Message {
             s.append(", wtxid ").append(wTxId);
         s.append('\n');
         int weight = getWeight();
-        int size = getMessageSize();
+        int size = this.messageSize();
         int vsize = getVsize();
         s.append(indent).append("weight: ").append(weight).append(" wu, ");
         if (size != vsize)
@@ -874,7 +808,7 @@ public class Transaction extends Message {
             s.append("out  ");
             try {
                 Script scriptPubKey = out.getScriptPubKey();
-                s.append(scriptPubKey.getChunks().size() > 0 ? scriptPubKey.toString() : "<no scriptPubKey>");
+                s.append(scriptPubKey.chunks().size() > 0 ? scriptPubKey.toString() : "<no scriptPubKey>");
                 s.append("  ");
                 s.append(out.getValue().toFriendlyString());
                 s.append('\n');
@@ -918,7 +852,6 @@ public class Transaction extends Message {
      * Note that this also invalidates the length attribute
      */
     public void clearInputs() {
-        unCache();
         for (TransactionInput input : inputs) {
             input.setParent(null);
         }
@@ -941,7 +874,6 @@ public class Transaction extends Message {
      * @return the new input.
      */
     public TransactionInput addInput(TransactionInput input) {
-        unCache();
         input.setParent(this);
         inputs.add(input);
         return input;
@@ -952,7 +884,7 @@ public class Transaction extends Message {
      * @return the newly created input.
      */
     public TransactionInput addInput(Sha256Hash spendTxHash, long outputIndex, Script script) {
-        return addInput(new TransactionInput(this, script.getProgram(), new TransactionOutPoint(outputIndex, spendTxHash)));
+        return addInput(new TransactionInput(this, script.program(), new TransactionOutPoint(outputIndex, spendTxHash)));
     }
 
     /**
@@ -1080,7 +1012,6 @@ public class Transaction extends Message {
      * Note that this also invalidates the length attribute
      */
     public void clearOutputs() {
-        unCache();
         for (TransactionOutput output : outputs) {
             output.setParent(null);
         }
@@ -1091,7 +1022,6 @@ public class Transaction extends Message {
      * Adds the given output to this transaction. The output must be completely initialized. Returns the given output.
      */
     public TransactionOutput addOutput(TransactionOutput to) {
-        unCache();
         to.setParent(this);
         outputs.add(to);
         return to;
@@ -1117,7 +1047,7 @@ public class Transaction extends Message {
      * you won't normally need to use it unless you're doing unusual things.
      */
     public TransactionOutput addOutput(Coin value, Script script) {
-        return addOutput(new TransactionOutput(this, value, script.getProgram()));
+        return addOutput(new TransactionOutput(this, value, script.program()));
     }
 
 
@@ -1156,7 +1086,7 @@ public class Transaction extends Message {
     public TransactionSignature calculateSignature(int inputIndex, ECKey key,
                                                                  Script redeemScript,
                                                                  SigHash hashType, boolean anyoneCanPay) {
-        Sha256Hash hash = hashForSignature(inputIndex, redeemScript.getProgram(), hashType, anyoneCanPay);
+        Sha256Hash hash = hashForSignature(inputIndex, redeemScript.program(), hashType, anyoneCanPay);
         return new TransactionSignature(key.sign(hash), hashType, anyoneCanPay);
     }
 
@@ -1199,7 +1129,7 @@ public class Transaction extends Message {
                                                    @Nullable AesKey aesKey,
                                                    Script redeemScript,
                                                    SigHash hashType, boolean anyoneCanPay) {
-        Sha256Hash hash = hashForSignature(inputIndex, redeemScript.getProgram(), hashType, anyoneCanPay);
+        Sha256Hash hash = hashForSignature(inputIndex, redeemScript.program(), hashType, anyoneCanPay);
         return new TransactionSignature(key.sign(hash, aesKey), hashType, anyoneCanPay);
     }
 
@@ -1240,7 +1170,7 @@ public class Transaction extends Message {
     public Sha256Hash hashForSignature(int inputIndex, Script redeemScript,
                                                     SigHash type, boolean anyoneCanPay) {
         int sigHash = TransactionSignature.calcSigHashValue(type, anyoneCanPay);
-        return hashForSignature(inputIndex, redeemScript.getProgram(), (byte) sigHash);
+        return hashForSignature(inputIndex, redeemScript.program(), (byte) sigHash);
     }
 
     /**
@@ -1256,7 +1186,7 @@ public class Transaction extends Message {
         try {
             // Create a copy of this transaction to operate upon because we need make changes to the inputs and outputs.
             // It would not be thread-safe to change the attributes of the transaction object itself.
-            Transaction tx = new Transaction(ByteBuffer.wrap(bitcoinSerialize()));
+            Transaction tx = Transaction.read(ByteBuffer.wrap(serialize()));
 
             // Clear input scripts in preparation for signing. If we're signing a fresh
             // transaction that step isn't very helpful, but it doesn't add much cost relative to the actual
@@ -1353,7 +1283,7 @@ public class Transaction extends Message {
             Coin value,
             SigHash hashType,
             boolean anyoneCanPay) {
-        return calculateWitnessSignature(inputIndex, key, scriptCode.getProgram(), value, hashType, anyoneCanPay);
+        return calculateWitnessSignature(inputIndex, key, scriptCode.program(), value, hashType, anyoneCanPay);
     }
 
     public TransactionSignature calculateWitnessSignature(
@@ -1376,7 +1306,7 @@ public class Transaction extends Message {
             Coin value,
             SigHash hashType,
             boolean anyoneCanPay) {
-        return calculateWitnessSignature(inputIndex, key, aesKey, scriptCode.getProgram(), value, hashType, anyoneCanPay);
+        return calculateWitnessSignature(inputIndex, key, aesKey, scriptCode.program(), value, hashType, anyoneCanPay);
     }
 
     public synchronized Sha256Hash hashForWitnessSignature(
@@ -1410,7 +1340,7 @@ public class Transaction extends Message {
             Coin prevValue,
             SigHash type,
             boolean anyoneCanPay) {
-        return hashForWitnessSignature(inputIndex, scriptCode.getProgram(), prevValue, type, anyoneCanPay);
+        return hashForWitnessSignature(inputIndex, scriptCode.program(), prevValue, type, anyoneCanPay);
     }
 
     public synchronized Sha256Hash hashForWitnessSignature(
@@ -1485,8 +1415,8 @@ public class Transaction extends Message {
     }
 
     @Override
-    public int getMessageSize() {
-        boolean useSegwit = hasWitnesses() && allowWitness(serializer.getProtocolVersion());
+    public int messageSize() {
+        boolean useSegwit = hasWitnesses() && allowWitness(protocolVersion);
         int size = 4; // version
         if (useSegwit)
             size += 2; // marker, flag
@@ -1505,7 +1435,7 @@ public class Transaction extends Message {
 
     @Override
     protected void bitcoinSerializeToStream(OutputStream stream) throws IOException {
-        boolean useSegwit = hasWitnesses() && allowWitness(serializer.getProtocolVersion());
+        boolean useSegwit = hasWitnesses() && allowWitness(protocolVersion);
         bitcoinSerializeToStream(stream, useSegwit);
     }
 
@@ -1529,12 +1459,11 @@ public class Transaction extends Message {
         // txout_count, txouts
         stream.write(VarInt.of(outputs.size()).serialize());
         for (TransactionOutput out : outputs)
-            out.bitcoinSerializeToStream(stream);
+            stream.write(out.serialize());
         // script_witnisses
         if (useSegwit) {
-            for (TransactionInput in : inputs) {
-                in.getWitness().bitcoinSerializeToStream(stream);
-            }
+            for (TransactionInput in : inputs)
+                stream.write(in.getWitness().serialize());
         }
         // lock_time
         writeInt32LE(vLockTime.rawValue(), stream);
@@ -1564,7 +1493,6 @@ public class Transaction extends Message {
      * standard and won't be relayed or included in the memory pool either.
      */
     public void setLockTime(long lockTime) {
-        unCache();
         boolean seqNumSet = false;
         for (TransactionInput input : inputs) {
             if (input.getSequenceNumber() != TransactionInput.NO_SEQUENCE) {
@@ -1586,7 +1514,6 @@ public class Transaction extends Message {
 
     public void setVersion(int version) {
         this.version = version;
-        unCache();
     }
 
     /** Returns an unmodifiable view of all inputs. */
@@ -1630,6 +1557,19 @@ public class Transaction extends Message {
     /** Same as getOutputs().get(index) */
     public TransactionOutput getOutput(long index) {
         return outputs.get((int)index);
+    }
+
+    /**
+     * Gets the output the gihven outpoint is referring to. Note the output must belong to this transaction, or else
+     * an {@link IllegalArgumentException} will occur.
+     *
+     * @param outpoint outpoint referring to the output to get
+     * @return output referred to by the given outpoint
+     */
+    public TransactionOutput getOutput(TransactionOutPoint outpoint) {
+        checkArgument(outpoint.hash().equals(this.getTxId()), () ->
+                "outpoint poins to a different transaction");
+        return getOutput(outpoint.index());
     }
 
     /**
@@ -1696,10 +1636,10 @@ public class Transaction extends Message {
         checkState(isCoinBase());
 
         // Check block height is in coinbase input script
-        final TransactionInput in = this.getInputs().get(0);
+        final TransactionInput in = this.getInput(0);
         final ScriptBuilder builder = new ScriptBuilder();
         builder.number(height);
-        final byte[] expected = builder.build().getProgram();
+        final byte[] expected = builder.build().program();
         final byte[] actual = in.getScriptBytes();
         if (actual.length < expected.length) {
             throw new VerificationException.CoinbaseHeightMismatch("Block height mismatch in coinbase.");
@@ -1858,14 +1798,14 @@ public class Transaction extends Message {
      *     coinbase inputs in the tx.</li>
      * </ul>
      *
-     * @param params parameters for the verification rules
-     * @param tx     transaction to verify
+     * @param network network for the verification rules
+     * @param tx      transaction to verify
      * @throws VerificationException if at least one of the rules is violated
      */
-    public static void verify(NetworkParameters params, Transaction tx) throws VerificationException {
+    public static void verify(Network network, Transaction tx) throws VerificationException {
         if (tx.inputs.size() == 0 || tx.outputs.size() == 0)
             throw new VerificationException.EmptyInputsOrOutputs();
-        if (tx.getMessageSize() > Block.MAX_BLOCK_SIZE)
+        if (tx.messageSize() > Block.MAX_BLOCK_SIZE)
             throw new VerificationException.LargerThanMaxBlockSize();
 
         HashSet<TransactionOutPoint> outpoints = new HashSet<>();
@@ -1885,7 +1825,7 @@ public class Transaction extends Message {
             } catch (ArithmeticException e) {
                 throw new VerificationException.ExcessiveValue();
             }
-            if (params.network().exceedsMaxMoney(valueOut))
+            if (network.exceedsMaxMoney(valueOut))
                 throw new VerificationException.ExcessiveValue();
         }
 
@@ -1897,5 +1837,13 @@ public class Transaction extends Message {
                 if (input.isCoinBase())
                     throw new VerificationException.UnexpectedCoinbaseInput();
         }
+    }
+
+    /**
+     * @deprecated use {@link #verify(Network, Transaction)}
+     */
+    @Deprecated
+    public static void verify(NetworkParameters params, Transaction tx) throws VerificationException {
+        verify(params.network(), tx);
     }
 }

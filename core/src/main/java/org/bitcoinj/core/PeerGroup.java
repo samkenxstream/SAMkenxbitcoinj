@@ -475,7 +475,7 @@ public class PeerGroup implements TransactionBroadcaster {
         peerDiscoverers = new CopyOnWriteArraySet<>();
         runningBroadcasts = Collections.synchronizedSet(new HashSet<TransactionBroadcast>());
         bloomFilterMerger = new FilterMerger(DEFAULT_BLOOM_FILTER_FP_RATE);
-        vMinRequiredProtocolVersion = params.getProtocolVersionNum(NetworkParameters.ProtocolVersion.BLOOM_FILTER);
+        vMinRequiredProtocolVersion = ProtocolVersion.BLOOM_FILTER.intValue();
     }
 
     private CountDownLatch executorStartupLatch = new CountDownLatch(1);
@@ -1041,12 +1041,12 @@ public class PeerGroup implements TransactionBroadcaster {
 
     /** Convenience method for {@link #addAddress(PeerAddress)}. */
     public void addAddress(InetAddress address) {
-        addAddress(new PeerAddress(address, params.getPort()));
+        addAddress(PeerAddress.simple(address, params.getPort()));
     }
 
     /** Convenience method for {@link #addAddress(PeerAddress, int)}. */
     public void addAddress(InetAddress address, int priority) {
-        addAddress(new PeerAddress(address, params.getPort()), priority);
+        addAddress(PeerAddress.simple(address, params.getPort()), priority);
     }
 
     /**
@@ -1092,7 +1092,7 @@ public class PeerGroup implements TransactionBroadcaster {
                 log.warn(e.getMessage());
                 continue;
             }
-            for (InetSocketAddress address : addresses) addressList.add(new PeerAddress(address));
+            for (InetSocketAddress address : addresses) addressList.add(PeerAddress.simple(address));
             if (addressList.size() >= maxPeersToDiscoverCount) break;
         }
         if (!addressList.isEmpty()) {
@@ -1462,7 +1462,7 @@ public class PeerGroup implements TransactionBroadcaster {
     public Peer connectTo(InetSocketAddress address) {
         lock.lock();
         try {
-            PeerAddress peerAddress = new PeerAddress(address);
+            PeerAddress peerAddress = PeerAddress.simple(address);
             backoffMap.put(peerAddress, new ExponentialBackoff(peerBackoffParams));
             return connectTo(peerAddress, true, vConnectTimeout);
         } finally {
@@ -1500,7 +1500,7 @@ public class PeerGroup implements TransactionBroadcaster {
         VersionMessage ver = getVersionMessage().duplicate();
         ver.bestHeight = chain == null ? 0 : chain.getBestChainHeight();
         ver.time = TimeUtils.currentTime().truncatedTo(ChronoUnit.SECONDS);
-        ver.receivingAddr = address;
+        ver.receivingAddr = new InetSocketAddress(address.getAddr(), address.getPort());
 
         Peer peer = createPeer(address, ver);
         peer.addConnectedEventListener(Threading.SAME_THREAD, startupListener);
@@ -1917,7 +1917,7 @@ public class PeerGroup implements TransactionBroadcaster {
 
         private int countAndMeasureSize(Collection<Transaction> transactions) {
             for (Transaction transaction : transactions)
-                bytesInLastSecond += transaction.getMessageSize();
+                bytesInLastSecond += transaction.messageSize();
             return transactions.size();
         }
 
@@ -2379,7 +2379,7 @@ public class PeerGroup implements TransactionBroadcaster {
         // Only select peers that announce the minimum protocol and services and that we think is fully synchronized.
         List<Peer> candidates = new LinkedList<>();
         int highestPriority = Integer.MIN_VALUE;
-        final int MINIMUM_VERSION = params.getProtocolVersionNum(NetworkParameters.ProtocolVersion.WITNESS_VERSION);
+        final int MINIMUM_VERSION = ProtocolVersion.WITNESS_VERSION.intValue();
         for (Peer peer : peers) {
             final VersionMessage versionMessage = peer.getPeerVersionMessage();
             if (versionMessage.clientVersion < MINIMUM_VERSION)

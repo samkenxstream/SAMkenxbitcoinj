@@ -159,7 +159,7 @@ public class SPVBlockStore implements BlockStore {
                 if (!new String(header, StandardCharsets.US_ASCII).equals(HEADER_MAGIC))
                     throw new BlockStoreException("Header bytes do not equal " + HEADER_MAGIC);
             } else {
-                initNewStore(params);
+                initNewStore(params.getGenesisBlock());
             }
         } catch (Exception e) {
             try {
@@ -171,7 +171,7 @@ public class SPVBlockStore implements BlockStore {
         }
     }
 
-    private void initNewStore(NetworkParameters params) throws Exception {
+    private void initNewStore(Block genesisBlock) throws Exception {
         byte[] header;
         header = HEADER_MAGIC.getBytes(StandardCharsets.US_ASCII);
         buffer.put(header);
@@ -182,8 +182,7 @@ public class SPVBlockStore implements BlockStore {
         } finally {
             lock.unlock();
         }
-        Block genesis = params.getGenesisBlock().cloneAsHeader();
-        StoredBlock storedGenesis = new StoredBlock(genesis, genesis.getWork(), 0);
+        StoredBlock storedGenesis = new StoredBlock(genesisBlock.cloneAsHeader(), genesisBlock.getWork(), 0);
         put(storedGenesis);
         setChainHead(storedGenesis);
     }
@@ -246,7 +245,7 @@ public class SPVBlockStore implements BlockStore {
                 buffer.get(scratch);
                 if (Arrays.equals(scratch, targetHashBytes)) {
                     // Found the target.
-                    StoredBlock storedBlock = StoredBlock.deserializeCompact(params.getDefaultSerializer(), buffer);
+                    StoredBlock storedBlock = StoredBlock.deserializeCompact(buffer);
                     blockCache.put(hash, storedBlock);
                     return storedBlock;
                 }
@@ -350,7 +349,7 @@ public class SPVBlockStore implements BlockStore {
             }
             // Initialize store again
             ((Buffer) buffer).position(0);
-            initNewStore(params);
+            initNewStore(params.getGenesisBlock());
         } finally { lock.unlock(); }
     }
 }

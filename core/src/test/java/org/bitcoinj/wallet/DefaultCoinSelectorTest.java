@@ -69,9 +69,9 @@ public class DefaultCoinSelectorTest extends TestWithWallet {
         assertFalse(DefaultCoinSelector.isSelectable(t, BitcoinNetwork.TESTNET));
         t.getConfidence().setSource(TransactionConfidence.Source.SELF);
         assertFalse(DefaultCoinSelector.isSelectable(t, BitcoinNetwork.TESTNET));
-        t.getConfidence().markBroadcastBy(new PeerAddress(InetAddress.getByName("1.2.3.4"), TESTNET.getPort()));
+        t.getConfidence().markBroadcastBy(PeerAddress.simple(InetAddress.getByName("1.2.3.4"), TESTNET.getPort()));
         assertTrue(DefaultCoinSelector.isSelectable(t, BitcoinNetwork.TESTNET));
-        t.getConfidence().markBroadcastBy(new PeerAddress(InetAddress.getByName("5.6.7.8"), TESTNET.getPort()));
+        t.getConfidence().markBroadcastBy(PeerAddress.simple(InetAddress.getByName("5.6.7.8"), TESTNET.getPort()));
         assertTrue(DefaultCoinSelector.isSelectable(t, BitcoinNetwork.TESTNET));
         t = new Transaction();
         t.getConfidence().setConfidenceType(TransactionConfidence.ConfidenceType.BUILDING);
@@ -91,7 +91,7 @@ public class DefaultCoinSelectorTest extends TestWithWallet {
         // Check we selected just the oldest one.
         CoinSelector selector = wallet.getCoinSelector();
         CoinSelection selection = selector.select(COIN, wallet.calculateAllSpendCandidates());
-        assertTrue(selection.outputs().contains(t1.getOutputs().get(0)));
+        assertTrue(selection.outputs().contains(t1.getOutput(0)));
         assertEquals(COIN, selection.totalValue());
 
         // Check we ordered them correctly (by depth).

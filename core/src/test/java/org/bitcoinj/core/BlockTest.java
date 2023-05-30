@@ -40,6 +40,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.math.BigInteger;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -144,7 +145,7 @@ public class BlockTest {
     @Test
     public void testHeaderParse() {
         Block header = block700000.cloneAsHeader();
-        Block reparsed = TESTNET.getDefaultSerializer().makeBlock(ByteBuffer.wrap(header.bitcoinSerialize()));
+        Block reparsed = TESTNET.getDefaultSerializer().makeBlock(ByteBuffer.wrap(header.serialize()));
         assertEquals(reparsed, header);
     }
 
@@ -154,7 +155,7 @@ public class BlockTest {
         // proves that transaction serialization works, along with all its subobjects like scripts and in/outpoints.
         //
         // NB: This tests the bitcoin serialization protocol.
-        assertArrayEquals(block700000Bytes, block700000.bitcoinSerialize());
+        assertArrayEquals(block700000Bytes, block700000.serialize());
     }
 
     @Test
@@ -207,7 +208,7 @@ public class BlockTest {
         // Create a wallet contain the miner's key that receives a spend from a coinbase.
         ECKey miningKey = DumpedPrivateKey.fromBase58(BitcoinNetwork.MAINNET, MINING_PRIVATE_KEY).getKey();
         assertNotNull(miningKey);
-        Wallet wallet = Wallet.createDeterministic(MAINNET, ScriptType.P2PKH);
+        Wallet wallet = Wallet.createDeterministic(BitcoinNetwork.MAINNET, ScriptType.P2PKH);
         wallet.importKey(miningKey);
 
         // Initial balance should be zero by construction.
@@ -324,11 +325,11 @@ public class BlockTest {
                 stream.write(VarInt.of(Integer.MAX_VALUE).serialize());
             }
         };
-        byte[] serializedBlock = block.bitcoinSerialize();
+        byte[] serializedBlock = block.serialize();
         try {
             TESTNET.getDefaultSerializer().makeBlock(ByteBuffer.wrap(serializedBlock));
-            fail("We expect ProtocolException with the fixed code and OutOfMemoryError with the buggy code, so this is weird");
-        } catch (ProtocolException e) {
+            fail("We expect BufferUnderflowException with the fixed code and OutOfMemoryError with the buggy code, so this is weird");
+        } catch (BufferUnderflowException e) {
             //Expected, do nothing
         }
     }

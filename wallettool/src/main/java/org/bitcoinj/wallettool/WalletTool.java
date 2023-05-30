@@ -18,6 +18,7 @@
 package org.bitcoinj.wallettool;
 
 import org.bitcoinj.base.BitcoinNetwork;
+import org.bitcoinj.base.Network;
 import org.bitcoinj.base.Sha256Hash;
 import org.bitcoinj.base.internal.TimeUtils;
 import org.bitcoinj.crypto.AesKey;
@@ -64,17 +65,12 @@ import org.bitcoinj.core.TransactionBroadcast;
 import org.bitcoinj.core.VerificationException;
 import org.bitcoinj.core.listeners.DownloadProgressTracker;
 import org.bitcoinj.wallet.KeyChainGroupStructure;
-import org.bitcoinj.wallet.MarriedKeyChain;
 import org.bitcoinj.wallet.Protos;
 import org.bitcoinj.wallet.SendRequest;
 import org.bitcoinj.wallet.UnreadableWalletException;
 import org.bitcoinj.wallet.Wallet;
 import org.bitcoinj.wallet.WalletProtobufSerializer;
 import org.bitcoinj.wallet.Wallet.BalanceType;
-import org.bitcoinj.wallet.listeners.WalletChangeEventListener;
-import org.bitcoinj.wallet.listeners.WalletCoinsReceivedEventListener;
-import org.bitcoinj.wallet.listeners.WalletCoinsSentEventListener;
-import org.bitcoinj.wallet.listeners.WalletReorganizeEventListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
@@ -87,8 +83,10 @@ import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.text.ParseException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -100,7 +98,6 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.stream.Collectors;
@@ -122,8 +119,6 @@ public class WalletTool implements Callable<Integer> {
             "                       If --watchkey is present, it creates a watching wallet using the specified base58 xpub.%n" +
             "                       If --seed or --watchkey is combined with either --date or --unixtime, use that as a birthdate for the wallet. See the set-creation-time action for the meaning of these flags.%n" +
             "                       If --output-script-type is present, use that for deriving addresses.%n" +
-            "  marry                Makes the wallet married with other parties, requiring multisig to spend funds.%n" +
-            "                       External public keys for other signing parties must be specified with --xpubkeys (comma separated).%n" +
             "  add-key              Adds a new key to the wallet.%n" +
             "                       If --date is specified, that's the creation date.%n" +
             "                       If --unixtime is specified, that's the creation time and it overrides --date.%n" +
@@ -320,7 +315,6 @@ public class WalletTool implements Callable<Integer> {
         SEND,
         ENCRYPT,
         DECRYPT,
-        MARRY,
         UPGRADE,
         ROTATE,
         SET_CREATION_TIME,
@@ -378,7 +372,7 @@ public class WalletTool implements Callable<Integer> {
         }
 
         if (action == ActionEnum.CREATE) {
-            createWallet(params, walletFile);
+            createWallet(net, walletFile);
             return 0;  // We're done.
         }
         if (!walletFile.exists()) {
@@ -488,7 +482,6 @@ public class WalletTool implements Callable<Integer> {
                 break;
             case ENCRYPT: encrypt(); break;
             case DECRYPT: decrypt(); break;
-            case MARRY: marry(); break;
             case UPGRADE: upgrade(); break;
             case ROTATE: rotate(); break;
             case SET_CREATION_TIME: setCreationTime(); break;
@@ -544,23 +537,6 @@ public class WalletTool implements Callable<Integer> {
 
     private static ByteString bytesToHex(ByteString bytes) {
         return ByteString.copyFrom(ByteUtils.formatHex(bytes.toByteArray()).getBytes());
-    }
-
-    private void marry() {
-        if (xpubKeysStr != null) {
-            throw new IllegalStateException();
-        }
-
-        String[] xpubkeys = xpubKeysStr.split(",");
-        List<DeterministicKey> keys = new ArrayList<>();
-        for (String xpubkey : xpubkeys) {
-            keys.add(DeterministicKey.deserializeB58(null, xpubkey.trim(), net));
-        }
-        MarriedKeyChain chain = MarriedKeyChain.builder()
-                .random(new SecureRandom())
-                .followingKeys(Collections.unmodifiableList(keys))
-                .build();
-        wallet.addAndActivateHDChain(chain);
     }
 
     private void upgrade() {
@@ -677,25 +653,21 @@ public class WalletTool implements Callable<Integer> {
                 return;
             }
         }
-        SendRequest req = SendRequest.forTx(tx);
-        if (coinSelector != null) {
-            req.coinSelector = coinSelector;
-            req.recipientsPayFees = true;
-        }
-        if (tx.getOutputs().size() == 1 && tx.getOutput(0).getValue().equals(balance)) {
+        boolean emptyWallet = tx.getOutputs().size() == 1 && tx.getOutput(0).getValue().equals(balance);
+        if (emptyWallet) {
             log.info("Emptying out wallet, recipient may get less than what you expect");
-            req.emptyWallet = true;
         }
-        if (feePerVkb != null)
-            req.setFeePerVkb(feePerVkb);
-        if (allowUnconfirmed) {
-            req.allowUnconfirmed();
-        }
+
+        AesKey aesKey;
         if (password != null) {
-            req.aesKey = passwordToKey(true);
-            if (req.aesKey == null)
+            aesKey = passwordToKey(true);
+            if (aesKey == null)
                 return;  // Error message already printed.
+        } else {
+            aesKey = null;
         }
+
+        SendRequest req = buildSendRequest(tx, emptyWallet, allowUnconfirmed, coinSelector, feePerVkb, aesKey);
 
         try {
             wallet.completeTx(req);
@@ -707,7 +679,7 @@ public class WalletTool implements Callable<Integer> {
             if (lockTimeStr != null) {
                 tx.setLockTime(parseLockTimeStr(lockTimeStr));
                 // For lock times to take effect, at least one output must have a non-final sequence number.
-                tx.getInputs().get(0).setSequenceNumber(0);
+                tx.getInput(0).setSequenceNumber(0);
                 // And because we modified the transaction after it was completed, we must re-sign the inputs.
                 wallet.signTransaction(req);
             }
@@ -742,6 +714,24 @@ public class WalletTool implements Callable<Integer> {
         } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    // "Atomically" create a SendRequest. In the future SendRequest may be immutable and this method will be updated
+    private SendRequest buildSendRequest(Transaction tx, boolean emptyWallet, boolean allowUnconfirmed, @Nullable CoinSelector coinSelector, @Nullable Coin feePerVkb, @Nullable AesKey aesKey) {
+        SendRequest req = SendRequest.forTx(tx);
+        req.emptyWallet = emptyWallet;
+        if (coinSelector != null) {
+            req.coinSelector = coinSelector;
+            req.recipientsPayFees = true;
+        }
+        if (allowUnconfirmed) {
+            // Note that this will overwrite the CoinSelector set above
+            req.allowUnconfirmed();
+        }
+        if (feePerVkb != null)
+            req.setFeePerVkb(feePerVkb);
+        req.aesKey = aesKey;
+        return req;
     }
 
     static class OutputSpec {
@@ -795,7 +785,7 @@ public class WalletTool implements Callable<Integer> {
                 if (location.startsWith("http")) {
                     future = PaymentSession.createFromUrl(location, verifyPki);
                 } else {
-                    BitcoinURI paymentRequestURI = new BitcoinURI(location);
+                    BitcoinURI paymentRequestURI = BitcoinURI.of(location);
                     future = PaymentSession.createFromBitcoinUri(paymentRequestURI, verifyPki);
                 }
                 PaymentSession session = future.get();
@@ -956,13 +946,22 @@ public class WalletTool implements Callable<Integer> {
                 // Check if the balance already meets the given condition.
                 if (condition.matchBitcoins(wallet.getBalance(Wallet.BalanceType.ESTIMATED))) {
                     latch.countDown();
-                    break;
+                } else {
+                    Runnable onChange = () -> {
+                        synchronized (this) {
+                            saveWallet(walletFile);
+                            Coin balance = wallet.getBalance(Wallet.BalanceType.ESTIMATED);
+                            if (condition.matchBitcoins(balance)) {
+                                System.out.println(balance.toFriendlyString());
+                                latch.countDown();
+                            }
+                        }
+                    };
+                    wallet.addCoinsReceivedEventListener((w, t, p, n) -> onChange.run());
+                    wallet.addCoinsSentEventListener((w, t, p, n) -> onChange.run());
+                    wallet.addChangeEventListener(w -> onChange.run());
+                    wallet.addReorganizeEventListener(w -> onChange.run());
                 }
-                final WalletEventListener listener = new WalletEventListener(latch);
-                wallet.addCoinsReceivedEventListener(listener);
-                wallet.addCoinsSentEventListener(listener);
-                wallet.addChangeEventListener(listener);
-                wallet.addReorganizeEventListener(listener);
                 break;
 
         }
@@ -1010,7 +1009,7 @@ public class WalletTool implements Callable<Integer> {
             chain = new FullPrunedBlockChain(params, wallet, (FullPrunedBlockStore) store);
         }
         // This will ensure the wallet is saved when it changes.
-        wallet.autosaveToFile(walletFile, 5, TimeUnit.SECONDS, null);
+        wallet.autosaveToFile(walletFile, Duration.ofSeconds(5), null);
         if (peerGroup == null) {
             peerGroup = new PeerGroup(net, chain);
         }
@@ -1022,7 +1021,7 @@ public class WalletTool implements Callable<Integer> {
             String[] peerAddrs = peersStr.split(",");
             for (String peer : peerAddrs) {
                 try {
-                    peerGroup.addAddress(new PeerAddress(InetAddress.getByName(peer), params.getPort()));
+                    peerGroup.addAddress(PeerAddress.simple(InetAddress.getByName(peer), params.getPort()));
                 } catch (UnknownHostException e) {
                     System.err.println("Could not understand peer domain name/IP address: " + peer + ": " + e.getMessage());
                     System.exit(1);
@@ -1069,14 +1068,14 @@ public class WalletTool implements Callable<Integer> {
         }
     }
 
-    private void createWallet(NetworkParameters params, File walletFile) throws IOException {
+    private void createWallet(Network network, File walletFile) throws IOException {
         KeyChainGroupStructure keyChainGroupStructure = KeyChainGroupStructure.BIP32;
 
         if (walletFile.exists() && !force) {
             System.err.println("Wallet creation requested but " + walletFile + " already exists, use --force");
             return;
         }
-        Instant creationTime = getCreationTime().orElse(Instant.ofEpochSecond(MnemonicCode.BIP39_STANDARDISATION_TIME_SECS));
+        Instant creationTime = getCreationTime().orElse(MnemonicCode.BIP39_STANDARDISATION_TIME);
         if (seedStr != null) {
             DeterministicSeed seed;
             // Parse as mnemonic code.
@@ -1098,11 +1097,11 @@ public class WalletTool implements Callable<Integer> {
                 // not reached - all subclasses handled above
                 throw new RuntimeException(e);
             }
-            wallet = Wallet.fromSeed(params, seed, outputScriptType, keyChainGroupStructure);
+            wallet = Wallet.fromSeed(network, seed, outputScriptType, keyChainGroupStructure);
         } else if (watchKeyStr != null) {
-            wallet = Wallet.fromWatchingKeyB58(params, watchKeyStr, creationTime);
+            wallet = Wallet.fromWatchingKeyB58(network, watchKeyStr, creationTime);
         } else {
-            wallet = Wallet.createDeterministic(params, outputScriptType, keyChainGroupStructure);
+            wallet = Wallet.createDeterministic(network, outputScriptType, keyChainGroupStructure);
         }
         if (password != null)
             wallet.encrypt(password);
@@ -1215,7 +1214,7 @@ public class WalletTool implements Callable<Integer> {
         if (unixtime != null)
             return Optional.of(Instant.ofEpochSecond(unixtime));
         else if (date != null)
-            return Optional.of(Instant.from(date));
+            return Optional.of(date.atStartOfDay(ZoneId.systemDefault()).toInstant());
         else
             return Optional.empty();
     }
@@ -1291,43 +1290,5 @@ public class WalletTool implements Callable<Integer> {
         System.out.println(creationTime
                 .map(time -> "Setting creation time to: " + TimeUtils.dateTimeFormat(time))
                 .orElse("Clearing creation time."));
-    }
-
-    private synchronized void onChange(final CountDownLatch latch) {
-        saveWallet(walletFile);
-        Coin balance = wallet.getBalance(Wallet.BalanceType.ESTIMATED);
-        if (condition.matchBitcoins(balance)) {
-            System.out.println(balance.toFriendlyString());
-            latch.countDown();
-        }
-    }
-
-    private class WalletEventListener implements WalletChangeEventListener, WalletCoinsReceivedEventListener,
-            WalletCoinsSentEventListener, WalletReorganizeEventListener {
-        private final CountDownLatch latch;
-
-        private  WalletEventListener(final CountDownLatch latch) {
-            this.latch = latch;
-        }
-
-        @Override
-        public void onWalletChanged(Wallet wallet) {
-            onChange(latch);
-        }
-
-        @Override
-        public void onCoinsReceived(Wallet wallet, Transaction tx, Coin prevBalance, Coin newBalance) {
-            onChange(latch);
-        }
-
-        @Override
-        public void onCoinsSent(Wallet wallet, Transaction tx, Coin prevBalance, Coin newBalance) {
-            onChange(latch);
-        }
-
-        @Override
-        public void onReorganize(Wallet wallet) {
-            onChange(latch);
-        }
     }
 }
